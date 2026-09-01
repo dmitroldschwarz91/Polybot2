@@ -1,0 +1,20 @@
+services:
+  bot:
+    build: .
+    container_name: polymarket-bot
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - config/.env
+    environment:
+      - AUTOSTART_BOT=${AUTOSTART_BOT:-0}
+    volumes:
+      # persist DB + logs across container restarts
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/status')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
