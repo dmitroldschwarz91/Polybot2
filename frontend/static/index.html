@@ -108,7 +108,7 @@
     </div>
     <div>
       <div class="card" style="margin-bottom:14px"><h3>Управление</h3>
-    <div class="field"><label>Стратегия (live)</label><select id="liveStrategy"><option value="standard">Standard (VacuumScalp)</option><option value="favdip">FavDip (фаворит+dip+revert)</option></select></div>
+    <div class="field"><label>Стратегия (live)</label><select id="liveStrategy"><option value="twap_inertia" selected>TWAP Inertia (маховик TWAP 60s)</option><option value="standard">Standard (VacuumScalp)</option><option value="favdip">FavDip (фаворит+dip+revert)</option></select></div>
         <div class="controls" style="margin-top:4px"><button class="btn green" id="btnStart">▶ Старт</button><button class="btn red" id="btnStop">■ Стоп</button></div>
         <div class="controls" style="margin-top:8px"><button class="btn" id="btnHalt">⏸ Halt (риск)</button><button class="btn" id="btnResume">▶ Resume</button></div>
       </div>
@@ -127,12 +127,12 @@
     <div>
       <div class="card" style="margin-bottom:14px"><h3>Параметры бэктеста</h3>
         <div class="grid3">
-          <div class="field"><label>Стратегия</label><select id="btStrategy"><option value="vacuum_scalp">Vacuum Scalp</option><option value="spread_capture">Spread Capture</option><option value="early_trend">Early Trend</option><option value="standard">Standard</option></select></div>
+          <div class="field"><label>Стратегия</label><select id="btStrategy"><option value="twap_inertia" selected>TWAP Inertia (маховик TWAP)</option><option value="vacuum_scalp">Vacuum Scalp</option><option value="spread_capture">Spread Capture</option><option value="early_trend">Early Trend</option><option value="standard">Standard</option></select></div>
           <div class="field"><label>Капитал ($)</label><input id="btCapital" type="number" step="0.5" value="15"></div>
           <div class="field"><label>Окно (мин)</label><input id="btInterval" type="number" value="5"></div>
           <div class="field"><label>SL override</label><input id="btSl" type="number" step="0.01" placeholder="0.06"></div>
           <div class="field"><label>Спред стакана</label><input id="btSpread" type="number" step="0.005" value="0.01"></div>
-          <div class="field"><label>Актив</label><select id="btAsset"><option>BTC</option><option>ETH</option></select></div>
+          <div class="field"><label>Актив</label><select id="btAsset"><option>BTC</option><option>ETH</option><option>SOL</option><option>XRP</option></select></div>
         </div>
         <div class="grid3" style="margin-top:6px">
           <div class="field"><label>Источник данных</label><select id="btMode"><option value="synthetic">Синтетика</option><option value="historical">Реальные (Binance)</option><option value="poly">🎯 REAL Polymarket</option></select></div>
@@ -173,7 +173,7 @@
       </div>
       <div class="card" style="margin-bottom:14px"><h3>⏬ Backfill</h3>
         <div class="grid3">
-          <div class="field"><label>Актив</label><select id="bfAsset"><option>BTC</option><option>ETH</option></select></div>
+          <div class="field"><label>Актив</label><select id="bfAsset"><option>BTC</option><option>ETH</option><option>SOL</option><option>XRP</option></select></div>
           <div class="field"><label>Start (unix)</label><input id="bfStart" type="number" placeholder="1771168800"></div>
           <div class="field"><label>End (unix)</label><input id="bfEnd" type="number" placeholder="1771212000"></div>
         </div>
@@ -182,7 +182,7 @@
       </div>
       <div class="card"><h3>🎯 Walk-forward оптимизация</h3>
         <div class="grid3">
-          <div class="field"><label>Стратегия</label><select id="optStrategy"><option value="vacuum_scalp">Vacuum Scalp</option><option value="early_trend">Early Trend</option></select></div>
+          <div class="field"><label>Стратегия</label><select id="optStrategy"><option value="twap_inertia" selected>TWAP Inertia</option><option value="vacuum_scalp">Vacuum Scalp</option><option value="early_trend">Early Trend</option></select></div>
           <div class="field"><label>Train интервалов</label><input id="optTrain" type="number" value="24"></div>
           <div class="field"><label>Test интервалов</label><input id="optTest" type="number" value="12"></div>
         </div>
@@ -221,7 +221,7 @@
           <div class="field"><label>Стартовый капитал ($)</label><input id="demoCapital" type="number" step="1" value="50"></div>
           <div class="field"><label>Порог входа</label><input id="demoThreshold" type="number" step="0.05" value="0.75"></div>
           <div class="field"><label>Stake ratio</label><input id="demoStake" type="number" step="0.01" value="0.05"></div>
-          <div class="field"><label>Стратегия</label><select id="demoStrategy"><option value="vacuum_scalp">VacuumScalp (полная)</option><option value="simple">SimpleEntry (как в бэктесте)</option><option value="zscore_reversal">ZScore Reversal (mean reversion + trailing)</option><option value="zpair">ZPair (Z-триггер + асинхронная пара)</option><option value="favdip">FavDip (фаворит на dip + revert)</option><option value="pair_first">PairFirst (rolling-low + пара)</option><option value="longshot">Longshot (аутсайдер + bias)</option></select></div>
+          <div class="field"><label>Стратегия</label><select id="demoStrategy"><option value="twap_inertia" selected>TWAP Inertia (маховик TWAP 60s + барьер)</option><option value="vacuum_scalp">VacuumScalp (полная)</option><option value="simple">SimpleEntry (как в бэктесте)</option><option value="zscore_reversal">ZScore Reversal (mean reversion + trailing)</option><option value="zpair">ZPair (Z-триггер + асинхронная пара)</option><option value="favdip">FavDip (фаворит на dip + revert)</option><option value="pair_first">PairFirst (rolling-low + пара)</option><option value="longshot">Longshot (аутсайдер + bias)</option></select></div>
         </div>
         <div class="controls" style="margin-top:12px"><button class="btn green" id="btnDemoStart">▶ Старт демо</button><button class="btn red" id="btnDemoStop">■ Стоп</button></div>
       </div>

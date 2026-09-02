@@ -25,7 +25,7 @@ class DemoConfigRequest(BaseModel):
     start_capital: Optional[float] = None
     threshold: Optional[float] = None
     stake_ratio: Optional[float] = None
-    strategy: Optional[str] = "vacuum_scalp"  # "vacuum_scalp" | "simple" | "zscore_reversal" | "zpair"
+    strategy: Optional[str] = "twap_inertia"  # "twap_inertia" | "vacuum_scalp" | "simple" | "zscore_reversal" | "zpair"
 
 
 def create_demo_router(settings: Settings) -> APIRouter:
@@ -57,7 +57,7 @@ def create_demo_router(settings: Settings) -> APIRouter:
         capital = req.start_capital or DEMO_START_CAPITAL
         thr = req.threshold or DEMO_THRESHOLD
         sr = req.stake_ratio or DEMO_STAKE_RATIO
-        strat = req.strategy or "vacuum_scalp"
+        strat = req.strategy or "twap_inertia"
         if eng:
             await eng.stop()
         demo_engine = DemoEngine(settings, start_capital=capital,
@@ -117,7 +117,7 @@ def create_demo_router(settings: Settings) -> APIRouter:
         return {"start_capital": DEMO_START_CAPITAL,
                 "threshold": DEMO_THRESHOLD,
                 "stake_ratio": DEMO_STAKE_RATIO,
-                "strategy": "vacuum_scalp",
+                "strategy": "twap_inertia",
                 "running": False}
 
     @router.websocket("/ws/demo")

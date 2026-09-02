@@ -43,6 +43,7 @@ from ..marketdata.book_poller import BookPoller
 from ..risk.manager import RiskManager
 from ..strategies.vacuum_scalp import VacuumScalpStrategy
 from ..strategies.simple_entry import SimpleEntryStrategy
+from ..strategies.twap_inertia import TWAPInertiaStrategy
 from ..strategies.base import Opportunity
 from ..strategies.favdip import (
     check_entry as _favdip_check,
@@ -232,6 +233,9 @@ class DemoEngine:
         elif self.strategy_name == "simple":
             self.strategy = SimpleEntryStrategy(self.s_demo, threshold=threshold)
             self.log.info("DEMO: Using SimpleEntryStrategy (backtest mode)")
+        elif self.strategy_name == "twap_inertia":
+            self.strategy = TWAPInertiaStrategy(self.s_demo)
+            self.log.info("DEMO: Using TWAPInertiaStrategy (TWAP barrier + frozen book guard)")
         else:
             self.s_demo.vacuum_scalp_min_token_price = threshold
             self.s_demo.vacuum_scalp_max_token_price = 0.92   # live data: 0.88 too tight on volatile market -> 0.92
@@ -1227,7 +1231,8 @@ class DemoEngine:
         """
         key = f"{asset}_{market.get('slug', '')}"
         last = self._last_sample_ts.get(key, 0)
-        if time.time() - last < self.s.demo_sample_interval_secs:
+        throttle = getattr(self.s, "demo_sample_interval_secs_active", 1.0) if stc <= 60.0 else getattr(self.s, "demo_sample_interval_secs_idle", 5.0)
+        if time.time() - last < throttle:
             return
         self._last_sample_ts[key] = time.time()
 

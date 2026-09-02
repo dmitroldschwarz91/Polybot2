@@ -171,6 +171,13 @@ def _pnl_to_trade_log(pnls: List[float]) -> List[dict]:
 
 def default_search_space(strategy: str) -> List[ParamSpec]:
     """A small, meaningful grid per strategy — keeps optimization fast."""
+    if strategy == "twap_inertia":
+        return [
+            ParamSpec("min_dev_pct", [0.015, 0.02, 0.03, 0.04]),
+            ParamSpec("min_barrier_pct", [0.05, 0.07, 0.08, 0.10]),
+            ParamSpec("min_token_ask", [0.55, 0.60, 0.65]),
+            ParamSpec("max_token_ask", [0.90, 0.92, 0.94, 0.96]),
+        ]
     if strategy == "vacuum_scalp":
         return [
             ParamSpec("entry_threshold", [0.75, 0.80, 0.85, 0.90]),
