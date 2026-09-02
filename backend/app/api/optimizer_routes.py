@@ -36,7 +36,7 @@ def create_optimizer_router(settings: Settings) -> APIRouter:
     @router.get("/api/optimize/spaces")
     async def spaces():
         out = {}
-        for strat in ("vacuum_scalp", "early_trend", "standard"):
+        for strat in ("twap_inertia", "vacuum_scalp", "early_trend", "standard"):
             out[strat] = {sp.name: sp.values for sp in default_search_space(strat)}
         return out
 

@@ -1,5 +1,6 @@
 """
-Shared interval-sample log I/O — compact TSV with automatic JSONL fallback.
+Shared interval-sample log I/O — compact TSV with automatic JSONL fallback,
+batch buffering, and non-blocking asynchronous writing.
 
 The demo writes demo_interval_samples as TSV (one header line `# ...`, then
 tab-separated rows) to slash the file size vs JSONL (no repeated keys per row).
@@ -11,10 +12,11 @@ Field names are identical to the legacy JSONL, so scripts that key on
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Canonical column order. Keep names == legacy JSONL keys for compatibility.
 FIELDS: List[str] = [
@@ -41,6 +43,20 @@ def _conv(field: str, val: str):
         return int(f) if f.is_integer() and field in ("ts", "secs_to_close") else f
     except ValueError:
         return val
+
+
+def format_sample_row(rec: dict) -> str:
+    """Format one sample record dictionary into a TSV string."""
+    row = []
+    for k in FIELDS:
+        v = rec.get(k)
+        if v is None:
+            row.append("")
+        elif isinstance(v, bool):
+            row.append("1" if v else "0")
+        else:
+            row.append(str(v))
+    return "\t".join(row)
 
 
 def load_samples(path) -> Dict[str, List[dict]]:
@@ -90,18 +106,74 @@ def append_sample(path, rec: dict) -> None:
     path = Path(path)
     new_file = (not path.exists()) or path.stat().st_size == 0
     try:
-        with path.open("a", encoding="utf-8") as f:
+        with path.open("a", encoding="utf-8", buffering=32768) as f:
             if new_file:
                 f.write("# " + "\t".join(FIELDS) + "\n")
-            row = []
-            for k in FIELDS:
-                v = rec.get(k)
-                if v is None:
-                    row.append("")
-                elif isinstance(v, bool):
-                    row.append("1" if v else "0")
-                else:
-                    row.append(str(v))
-            f.write("\t".join(row) + "\n")
+            f.write(format_sample_row(rec) + "\n")
     except OSError:
         pass
+
+
+class AsyncSampleBuffer:
+    """Non-blocking ring buffer for high-frequency multi-asset sample logging.
+    Accumulates records in RAM and flushes in batches without stalling the asyncio loop."""
+
+    def __init__(self, path: Path, flush_interval: float = 2.0, max_batch: int = 100):
+        self.path = Path(path)
+        self.flush_interval = flush_interval
+        self.max_batch = max_batch
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self._task: Optional[asyncio.Task] = None
+        self._stopped = False
+
+    def start(self):
+        if self._task is None:
+            self._task = asyncio.create_task(self._flush_loop(), name="async-sample-logger")
+
+    def push(self, rec: dict):
+        if not self._stopped:
+            self.queue.put_nowait(rec)
+
+    async def _flush_loop(self):
+        batch: List[dict] = []
+        while not self._stopped:
+            try:
+                while len(batch) < self.max_batch:
+                    rec = await asyncio.wait_for(self.queue.get(), timeout=self.flush_interval)
+                    batch.append(rec)
+            except asyncio.TimeoutError:
+                pass
+            if batch:
+                await self._write_batch(batch)
+                batch.clear()
+
+    async def _write_batch(self, batch: List[dict]):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._sync_write, batch)
+
+    def _sync_write(self, batch: List[dict]):
+        new_file = (not self.path.exists()) or self.path.stat().st_size == 0
+        try:
+            with self.path.open("a", encoding="utf-8", buffering=65536) as f:
+                if new_file:
+                    f.write("# " + "\t".join(FIELDS) + "\n")
+                for rec in batch:
+                    f.write(format_sample_row(rec) + "\n")
+        except OSError:
+            pass
+
+    async def stop(self):
+        self._stopped = True
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+        # flush remaining
+        rem: List[dict] = []
+        while not self.queue.empty():
+            rem.append(self.queue.get_nowait())
+        if rem:
+            self._sync_write(rem)
