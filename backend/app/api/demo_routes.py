@@ -10,9 +10,9 @@ Demo trading API routes.
 
 from __future__ import annotations
 
-from typing import Optional
 import asyncio
 import json
+from typing import List, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -26,6 +26,7 @@ class DemoConfigRequest(BaseModel):
     threshold: Optional[float] = None
     stake_ratio: Optional[float] = None
     strategy: Optional[str] = "twap_inertia"  # "twap_inertia" | "vacuum_scalp" | "simple" | "zscore_reversal" | "zpair"
+    assets: Optional[List[str]] = None
 
 
 def create_demo_router(settings: Settings) -> APIRouter:
@@ -45,7 +46,7 @@ def create_demo_router(settings: Settings) -> APIRouter:
             return {"running": False, "demo": True,
                     "virtual_capital": DEMO_START_CAPITAL,
                     "start_capital": DEMO_START_CAPITAL}
-        return eng.status.to_dict(eng.positions, eng.stats, eng.risk, self.prices,
+        return eng.status.to_dict(eng.positions, eng.stats, eng.risk, eng.prices,
                                   getattr(eng, "_pending_leg1", {}))
 
     @router.post("/api/demo/start")
@@ -61,11 +62,13 @@ def create_demo_router(settings: Settings) -> APIRouter:
         if eng:
             await eng.stop()
         demo_engine = DemoEngine(settings, start_capital=capital,
-                                 threshold=thr, stake_ratio=sr, strategy=strat)
+                                 threshold=thr, stake_ratio=sr, strategy=strat,
+                                 assets=chosen_assets)
         await demo_engine.start()
         return {"ok": True, "config": {"start_capital": capital,
                                         "threshold": thr, "stake_ratio": sr,
-                                        "strategy": strat}}
+                                        "strategy": strat,
+                                        "assets": chosen_assets}}
 
     @router.post("/api/demo/stop")
     async def demo_stop():
@@ -113,11 +116,13 @@ def create_demo_router(settings: Settings) -> APIRouter:
                     "threshold": eng.threshold,
                     "stake_ratio": eng.stake_ratio,
                     "strategy": eng.strategy_name,
+                    "assets": eng.s_demo.assets,
                     "running": eng.running}
         return {"start_capital": DEMO_START_CAPITAL,
                 "threshold": DEMO_THRESHOLD,
                 "stake_ratio": DEMO_STAKE_RATIO,
                 "strategy": "twap_inertia",
+                "assets": settings.assets,
                 "running": False}
 
     @router.websocket("/ws/demo")
