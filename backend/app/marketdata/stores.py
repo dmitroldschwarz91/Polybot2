@@ -44,7 +44,7 @@ class LivePriceStore:
 
     def __init__(self, assets: List[str], book_stale_secs: float = 30.0,
                  vol_cache_ttl: float = 0.5) -> None:
-        self.assets = assets
+        self.assets = list(assets)
         self.book_stale_secs = book_stale_secs
 
         self.chainlink: Dict[str, float] = {}
@@ -85,6 +85,24 @@ class LivePriceStore:
 
         self._volatility_cache: Dict[str, Tuple[float, float]] = {}
         self._vol_cache_ttl = vol_cache_ttl
+
+    def set_assets(self, assets: List[str]) -> None:
+        """Dynamically update active tracked assets."""
+        self.assets = list(assets)
+        for a in assets:
+            if a not in self.chainlink_history:
+                self.chainlink_history[a] = deque(maxlen=600)
+            if a not in self.chainlink_twap_history:
+                self.chainlink_twap_history[a] = deque(maxlen=600)
+            if a not in self.binance_history:
+                self.binance_history[a] = deque(maxlen=600)
+            if a not in self.binance_direct_history:
+                self.binance_direct_history[a] = deque(maxlen=600)
+            if a not in self.range_history:
+                self.range_history[a] = deque(maxlen=120)
+            if a not in self.vwap_num:
+                self.vwap_num[a] = 0.0
+                self.vwap_den[a] = 0.0
 
     # ── Updaters ─────────────────────────────────────────────────────────
 
