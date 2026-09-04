@@ -66,6 +66,11 @@
   @media(max-width:600px){.grid3{grid-template-columns:1fr}}
   .chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
   .chk input{width:16px;height:16px}
+  .asset-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  .asset-chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;user-select:none;transition:.15s}
+  .asset-chip:hover{border-color:var(--blue)}
+  .asset-chip input{margin:0;cursor:pointer;accent-color:var(--blue)}
+  .asset-chip:has(input:checked), .asset-chip.active{border-color:var(--blue);background:rgba(59,130,246,.15);color:var(--text)}
   .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   .metric-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
@@ -108,8 +113,16 @@
     </div>
     <div>
       <div class="card" style="margin-bottom:14px"><h3>Управление</h3>
-    <div class="field"><label>Стратегия (live)</label><select id="liveStrategy"><option value="twap_inertia" selected>TWAP Inertia (маховик TWAP 60s)</option><option value="standard">Standard (VacuumScalp)</option><option value="favdip">FavDip (фаворит+dip+revert)</option></select></div>
-        <div class="controls" style="margin-top:4px"><button class="btn green" id="btnStart">▶ Старт</button><button class="btn red" id="btnStop">■ Стоп</button></div>
+        <div class="field"><label>Стратегия (live)</label><select id="liveStrategy"><option value="twap_inertia" selected>TWAP Inertia (маховик TWAP 60s)</option><option value="standard">Standard (VacuumScalp)</option><option value="favdip">FavDip (фаворит+dip+revert)</option></select></div>
+        <div class="field"><label>Торгуемые активы (live)</label>
+          <div class="asset-chips" id="liveAssetChips">
+            <label class="asset-chip"><input type="checkbox" name="liveAsset" value="BTC" checked> BTC</label>
+            <label class="asset-chip"><input type="checkbox" name="liveAsset" value="ETH" checked> ETH</label>
+            <label class="asset-chip"><input type="checkbox" name="liveAsset" value="SOL" checked> SOL</label>
+            <label class="asset-chip"><input type="checkbox" name="liveAsset" value="XRP" checked> XRP</label>
+          </div>
+        </div>
+        <div class="controls" style="margin-top:8px"><button class="btn green" id="btnStart">▶ Старт</button><button class="btn red" id="btnStop">■ Стоп</button></div>
         <div class="controls" style="margin-top:8px"><button class="btn" id="btnHalt">⏸ Halt (риск)</button><button class="btn" id="btnResume">▶ Resume</button></div>
       </div>
       <div class="card" style="margin-bottom:14px"><h3>Управление рисками</h3><div id="riskPanel"></div></div>
@@ -221,7 +234,15 @@
           <div class="field"><label>Стартовый капитал ($)</label><input id="demoCapital" type="number" step="1" value="50"></div>
           <div class="field"><label>Порог входа</label><input id="demoThreshold" type="number" step="0.05" value="0.75"></div>
           <div class="field"><label>Stake ratio</label><input id="demoStake" type="number" step="0.01" value="0.05"></div>
-          <div class="field"><label>Стратегия</label><select id="demoStrategy"><option value="twap_inertia" selected>TWAP Inertia (маховик TWAP 60s + барьер)</option><option value="vacuum_scalp">VacuumScalp (полная)</option><option value="simple">SimpleEntry (как в бэктесте)</option><option value="zscore_reversal">ZScore Reversal (mean reversion + trailing)</option><option value="zpair">ZPair (Z-триггер + асинхронная пара)</option><option value="favdip">FavDip (фаворит на dip + revert)</option><option value="pair_first">PairFirst (rolling-low + пара)</option><option value="longshot">Longshot (аутсайдер + bias)</option></select></div>
+        </div>
+        <div class="field" style="margin-top:6px"><label>Стратегия</label><select id="demoStrategy"><option value="twap_inertia" selected>TWAP Inertia (маховик TWAP 60s + барьер)</option><option value="vacuum_scalp">VacuumScalp (полная)</option><option value="simple">SimpleEntry (как в бэктесте)</option><option value="zscore_reversal">ZScore Reversal (mean reversion + trailing)</option><option value="zpair">ZPair (Z-триггер + асинхронная пара)</option><option value="favdip">FavDip (фаворит на dip + revert)</option><option value="pair_first">PairFirst (rolling-low + пара)</option><option value="longshot">Longshot (аутсайдер + bias)</option></select></div>
+        <div class="field" style="margin-top:8px"><label>Торгуемые активы (демо)</label>
+          <div class="asset-chips" id="demoAssetChips">
+            <label class="asset-chip"><input type="checkbox" name="demoAsset" value="BTC" checked> BTC</label>
+            <label class="asset-chip"><input type="checkbox" name="demoAsset" value="ETH" checked> ETH</label>
+            <label class="asset-chip"><input type="checkbox" name="demoAsset" value="SOL" checked> SOL</label>
+            <label class="asset-chip"><input type="checkbox" name="demoAsset" value="XRP" checked> XRP</label>
+          </div>
         </div>
         <div class="controls" style="margin-top:12px"><button class="btn green" id="btnDemoStart">▶ Старт демо</button><button class="btn red" id="btnDemoStop">■ Стоп</button></div>
       </div>
@@ -473,8 +494,45 @@ async function loadDemoTrades(){
   }catch(_){}
 }
 
-// ── Привязка кнопок ──
-$('btnStart').onclick = function(){ post('/api/bot/start'); };
+// ── Вспомогательные функции для выбора активов ──
+function getSelectedAssets(name){
+  var inputs = document.querySelectorAll('input[name="'+name+'"]:checked');
+  var assets = Array.from(inputs).map(function(el){ return el.value; });
+  return assets.length ? assets : ['BTC', 'ETH', 'SOL', 'XRP'];
+}
+function setSelectedAssets(name, assets){
+  if(!assets || !assets.length) return;
+  var set = new Set(assets.map(function(a){ return a.toUpperCase(); }));
+  document.querySelectorAll('input[name="'+name+'"]').forEach(function(el){
+    el.checked = set.has(el.value.toUpperCase());
+  });
+}
+async function loadConfig(){
+  try {
+    var cfg = await (await fetch('/api/config')).json();
+    if(cfg.assets) setSelectedAssets('liveAsset', cfg.assets);
+    if(cfg.trading_strategy && $('liveStrategy')) $('liveStrategy').value = cfg.trading_strategy;
+  } catch(_){}
+  try {
+    var dcfg = await (await fetch('/api/demo/config')).json();
+    if(dcfg.assets) setSelectedAssets('demoAsset', dcfg.assets);
+    if(dcfg.strategy && $('demoStrategy')) $('demoStrategy').value = dcfg.strategy;
+    if(dcfg.start_capital && $('demoCapital')) $('demoCapital').value = dcfg.start_capital;
+  } catch(_){}
+}
+
+  // ── Привязка кнопок ──
+$('btnStart').onclick = async function(){
+  var body = {
+    strategy: $('liveStrategy').value,
+    assets: getSelectedAssets('liveAsset')
+  };
+  await fetch('/api/bot/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+};
 $('btnStop').onclick = function(){ post('/api/bot/stop'); };
 $('btnHalt').onclick = function(){ post('/api/risk/halt?reason=manual'); };
 $('btnResume').onclick = function(){ post('/api/risk/resume'); };
@@ -511,8 +569,19 @@ $('btnOptRun').onclick = async function(){
   }catch(e){ $('optStatus').innerHTML='<span style="color:var(--red)">'+e.message+'</span>'; }
 };
 $('btnDemoStart').onclick = async function(){
-  var body={start_capital:+$('demoCapital').value,threshold:+$('demoThreshold').value,stake_ratio:+$('demoStake').value,strategy:$('demoStrategy').value};
-  await fetch('/api/demo/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); connectDemo();
+  var body={
+    start_capital:+$('demoCapital').value,
+    threshold:+$('demoThreshold').value,
+    stake_ratio:+$('demoStake').value,
+    strategy:$('demoStrategy').value,
+    assets:getSelectedAssets('demoAsset')
+  };
+  await fetch('/api/demo/start',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  connectDemo();
 };
 $('btnDemoStop').onclick = async function(){ await fetch('/api/demo/stop',{method:'POST'}); };
 $('btnDemoCompare').onclick = async function(){
@@ -521,13 +590,14 @@ $('btnDemoCompare').onclick = async function(){
     if(r.error){ $('demoCompareStatus').innerHTML='<span style="color:var(--amber)">'+r.error+'</span>'; return; }
     $('demoCompareStatus').textContent='';
     var d=r.demo||{},b=r.backtest||{},cmp=r.comparison||{};
-    $('demoCompareResult').innerHTML='<div style="font-weight:600;margin-bottom:12px">'+(cmp.verdict||'—')+'</div><div class="metric-grid"><div class="metric"><div class="ml">Демо</div><div class="mv">'+(d.trades||0)+' сделок</div></div><div class="metric"><div class="ml">Бэктест</div><div class="mv">'+(b.trades||0)+' сделок</div></div><div class="metric"><div class="ml">Демо возврат</div><div class="mv '+cls(d.return_pct||0)+'">'+(d.return_pct||0).toFixed(1)+'%</div></div><div class="metric"><div class="ml">Бэктест возврат</div><div class="mv '+cls(b.return_pct||0)+'">'+(b.return_pct||0).toFixed(1)+'%</div></div></div>';
+    $('demoCompareResult').innerHTML='<div style="font-weight:600;margin-bottom:12px">'+(cmp.verdict||'—')+'</div><div class="metric-grid"><div class="metric"><div class="ml">Демо</div><div class="mv">'+(d.trades||0)+' сделок</div></div><div class="ml">Бэктест</div><div class="mv">'+(b.trades||0)+' сделок</div></div><div class="metric"><div class="ml">Демо возврат</div><div class="mv '+cls(d.return_pct||0)+'">'+(d.return_pct||0).toFixed(1)+'%</div></div><div class="metric"><div class="ml">Бэктест возврат</div><div class="mv '+cls(b.return_pct||0)+'">'+(b.return_pct||0).toFixed(1)+'%</div></div></div>';
   }catch(e){ $('demoCompareStatus').innerHTML='<span style="color:var(--red)">'+e.message+'</span>'; }
 };
 $('btnDemoClearHist').onclick = async function(){ await fetch('/api/demo/clear-history',{method:'POST'}); $('demoCompareResult').innerHTML=''; loadDemoTrades(); };
 
 // ── Инициализация ──
 connect();
+loadConfig();
 loadTrades(); loadChart();
 loadCollector();
 loadDemoTrades();
