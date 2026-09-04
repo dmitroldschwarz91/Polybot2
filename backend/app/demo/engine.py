@@ -33,7 +33,7 @@ from ..config import Settings
 from ..core.http import AsyncHTTP
 from ..core.logging import StructuredLogger, build_logger
 from ..domain.enums import CloseReason, EntryType
-from ..domain.models import Position, TradeStats
+from ..domain.models import Position, TradeStats, polymarket_dynamic_taker_fee
 from ..domain.resolution import (
     cross_validate, gamma_outcome, leader_token_outcome, late_truth_outcome,
 )
@@ -166,7 +166,8 @@ class DemoEngine:
                  start_capital: float = DEMO_START_CAPITAL,
                  threshold: float = DEMO_THRESHOLD,
                  stake_ratio: float = DEMO_STAKE_RATIO,
-                 strategy: str = "vacuum_scalp") -> None:
+                 strategy: str = "vacuum_scalp",
+                 assets: Optional[List[str]] = None) -> None:
         self.s = settings
         # Duplicate the full demo log stream to logs/demo.log (rotating JSON),
         # so trade outcomes (RESOLVE WIN/LOSS) are persisted to file, not only console.
@@ -177,9 +178,10 @@ class DemoEngine:
         self.threshold = threshold
         self.stake_ratio = stake_ratio
         self.strategy_name = strategy
+        chosen_assets = [a.strip().upper() for a in assets] if assets else list(settings.assets)
 
         # ── shared infrastructure with the live bot ──
-        self.prices = LivePriceStore(settings.assets, settings.ws_book_stale_secs)
+        self.prices = LivePriceStore(chosen_assets, settings.ws_book_stale_secs)
         self.fills = type("F", (), {"orders": {}})()  # dummy fill store
         self.http = AsyncHTTP()
         self.ws = WebSocketManager(settings, self.prices, self.fills, self.log)
@@ -189,8 +191,8 @@ class DemoEngine:
         self.s_demo = settings.model_copy()
         self.s_demo.vacuum_scalp_enabled = True
         self.s_demo.max_stake_ratio = stake_ratio
-        self.s_demo.assets = settings.assets
-        self.s_demo.max_concurrent_positions = 1
+        self.s_demo.assets = chosen_assets
+        self.s_demo.max_concurrent_positions = max(1, len(chosen_assets))
         # демо: отключаем лимиты убытков — при WR 55% просадки 40%+ штатны,
         # лимиты 30/50% будут ложно стопить. 1.0 = никогда не сработают.
         self.s_demo.max_daily_loss_pct = 1.0
@@ -941,20 +943,25 @@ class DemoEngine:
                 shares = 5
             else:
                 return
+        # Polymarket dynamic taker fee at match time: C * 0.07 * p * (1 - p)
+        dyn_fee = polymarket_dynamic_taker_fee(shares, fill_price)
         cost = round(shares * fill_price, 4)
-        if cost > self.status.virtual_capital:
-            shares = max(5, int(self.status.virtual_capital / fill_price))
+        total_cost = cost + dyn_fee
+        if total_cost > self.status.virtual_capital:
+            shares = max(5, int((self.status.virtual_capital - dyn_fee) / fill_price))
             if shares < 5:
                 return
+            dyn_fee = polymarket_dynamic_taker_fee(shares, fill_price)
             cost = round(shares * fill_price, 4)
+            total_cost = cost + dyn_fee
 
-        # deduct from virtual capital
-        self.status.virtual_capital = round(self.status.virtual_capital - cost, 4)
+        # deduct total cost (order value + dynamic taker fee) from virtual capital
+        self.status.virtual_capital = round(self.status.virtual_capital - total_cost, 4)
 
         pos = DemoPosition(
             slug=market["slug"], asset=asset, token_id=token_id,
             direction=opp.direction, entry_price=fill_price,
-            shares=shares, cost=cost, entry_ts=time.time(),
+            shares=shares, cost=total_cost, entry_ts=time.time(),
             end_ts=market["end_ts"], interval_ts=self._cur_interval,
         )
         self.positions[market["slug"]] = pos
@@ -1092,11 +1099,11 @@ class DemoEngine:
             if won is None:
                 continue  # keep retrying
 
-            # compute P&L (HOLD to resolution)
+            # compute P&L (HOLD to resolution, dynamic taker fee paid at entry)
+            dyn_fee = polymarket_dynamic_taker_fee(pos.shares, pos.entry_price)
             if won:
-                proceeds = pos.shares * 1.0
-                fee = proceeds * DEMO_FEE
-                pnl = proceeds - pos.cost - fee
+                proceeds = pos.shares * 1.0  # Polymarket settlement $1/share, 0% winnings fee
+                pnl = proceeds - pos.cost
             else:
                 proceeds = 0.0
                 pnl = -pos.cost
@@ -1107,13 +1114,13 @@ class DemoEngine:
             pos.close_reason = "expired_win" if won else "expired_loss"
 
             # add proceeds back to virtual capital
-            self.status.virtual_capital = round(self.status.virtual_capital + proceeds - (fee if won else 0), 4)
+            self.status.virtual_capital = round(self.status.virtual_capital + proceeds, 4)
             self.risk.record_realized_pnl(pnl)
             self.stats.record(pnl, EntryType.VACUUM_SCALP,
                               CloseReason.EXPIRED if not won else CloseReason.TAKE_PROFIT)
 
             # ── structured trade result → logs/demo_results.jsonl + console + demo.log ──
-            self._log_result(pos, won, pnl, proceeds, fee if won else 0.0, resolve_method,
+            self._log_result(pos, won, pnl, proceeds, dyn_fee, resolve_method,
                              cl_won=_cl_won, tok_won=_tok_won, agree=_agree)
 
             # persist to history for later comparison with backtest
@@ -1413,6 +1420,7 @@ class DemoEngine:
             "cost": pos.cost,
             "proceeds": round(proceeds, 4),
             "fee": round(fee, 4),
+            "fee_type": "dynamic_polymarket",
             "entry_ts": int(pos.entry_ts),
             "end_ts": int(pos.end_ts),
             "secs_held": round(now - pos.entry_ts, 1),
