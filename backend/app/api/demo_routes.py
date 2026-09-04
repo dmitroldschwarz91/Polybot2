@@ -59,6 +59,7 @@ def create_demo_router(settings: Settings) -> APIRouter:
         thr = req.threshold or DEMO_THRESHOLD
         sr = req.stake_ratio or DEMO_STAKE_RATIO
         strat = req.strategy or "twap_inertia"
+        chosen_assets = req.assets if req.assets else settings.assets
         if eng:
             await eng.stop()
         demo_engine = DemoEngine(settings, start_capital=capital,
