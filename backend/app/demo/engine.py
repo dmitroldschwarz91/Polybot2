@@ -476,7 +476,7 @@ class DemoEngine:
             if time.time() - last_ts > 60:
                 self._last_reject_log[key] = time.time()
                 stc_str = f"{int(stc)}s"
-                op_str = f"${op:.2f}" if op else "None"
+                op_str = (f"${op:.4f}" if op < 10.0 else f"${op:.2f}") if op else "None"
                 tok_str = f"${tok_price:.3f}" if tok_price else "None"
                 if self.strategy_name == "twap_inertia":
                     phase = "TWAP_WINDOW" if (self.s.twap_stc_min <= stc <= self.s.twap_stc_max) else "WAIT"
@@ -1176,8 +1176,10 @@ class DemoEngine:
             return None
         up_won = close_val >= open_val
         result = up_won if pos.direction == "UP" else (not up_won)
-        self.log.info(
-            f"[DEMO] official TWAP: close=${close_val:.2f} vs open=${open_val:.2f} → {'WIN' if result else 'LOSS'}")
+        c_str = f"${close_val:.4f}" if close_val < 10.0 else f"${close_val:.2f}"
+        o_str = f"${open_val:.4f}" if open_val < 10.0 else f"${open_val:.2f}"   
+     self.log.info(
+            f"[DEMO] official TWAP: close={c_str} vs open={o_str} → {'WIN' if result else 'LOSS'}")
         return result
 
     def _resolve_from_chainlink_history(self, pos: DemoPosition) -> Optional[bool]:
@@ -1217,7 +1219,9 @@ class DemoEngine:
             return None
         up_won = best_price >= sp
         result = up_won if pos.direction == "UP" else (not up_won)
-        self.log.info(f"[DEMO] local TWAP reconst({len(twap)}pts): ${best_price:.2f} vs ${sp:.2f} → {'WIN' if result else 'LOSS'}")
+        bp_str = f"${best_price:.4f}" if best_price < 10.0 else f"${best_price:.2f}"
+        sp_str = f"${sp:.4f}" if sp < 10.0 else f"${sp:.2f}"
+        self.log.info(f"[DEMO] local TWAP reconst({len(twap)}pts): {bp_str} vs {sp_str} → {'WIN' if result else 'LOSS'}")
         return result
 
     async def _wait_for_feeds(self) -> None:
