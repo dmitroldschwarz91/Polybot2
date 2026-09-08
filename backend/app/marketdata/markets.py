@@ -58,6 +58,16 @@ class TrendTracker:
                 "oracle_price": op, "chainlink_age": prices.get_chainlink_age(asset)}
 
 
+def fmt_asset_price(price: Optional[float]) -> str:
+    if price is None:
+        return "None"
+    if price < 1.0:
+        return f"${price:.4f}"
+    if price < 10.0:
+        return f"${price:.3f}"
+    return f"${price:.2f}"
+
+
 class MarketData:
     """Fetches Polymarket markets and resolves the interval 'price to beat'."""
 
@@ -160,7 +170,7 @@ class MarketData:
         if price is not None:
             self.start_prices[key][asset] = price
             self.log.info(f"[{asset}] Start price from Chainlink",
-                          interval=interval_ts, price=f"${price:.2f}")
+                          interval=interval_ts, price=fmt_asset_price(price))
             return price
 
         if not allow_fallback:
@@ -170,13 +180,13 @@ class MarketData:
         if price is not None:
             self.start_prices[key][asset] = price
             self.log.warning(f"[{asset}] Start price from Binance fallback",
-                             interval=interval_ts, price=f"${price:.2f}")
+                             interval=interval_ts, price=fmt_asset_price(price))
             return price
 
         price = self.prices.get_oracle_price(asset)
         if price is not None:
             self.start_prices[key][asset] = price
-            self.log.warning(f"[{asset}] Using current oracle as start price", price=f"${price:.2f}")
+            self.log.warning(f"[{asset}] Using current oracle as start price", price=fmt_asset_price(price))
             return price
         return None
 
