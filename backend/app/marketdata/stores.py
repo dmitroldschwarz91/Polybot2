@@ -108,7 +108,7 @@ class LivePriceStore:
 
     def update_chainlink(self, asset: str, price: float, oracle_ts_ms: Optional[int] = None) -> None:
         if asset not in self.chainlink_history:
-            return
+            self.chainlink_history[asset] = deque(maxlen=600)
         now = time.time()
         self.chainlink[asset] = price
         self.chainlink_ts[asset] = now
@@ -125,7 +125,7 @@ class LivePriceStore:
         boundary lookups resolution needs).
         """
         if asset not in self.chainlink_twap_history:
-            return
+            self.chainlink_twap_history[asset] = deque(maxlen=600)
         now = time.time()
         self.chainlink_twap[asset] = value
         if oracle_ts_ms is not None and oracle_ts_ms > 0:
@@ -191,7 +191,7 @@ class LivePriceStore:
 
     def update_binance(self, asset: str, price: float) -> None:
         if asset not in self.binance_history:
-            return
+            self.binance_history[asset] = deque(maxlen=600)
         now = time.time()
         self.binance[asset] = price
         self.binance_ts[asset] = now
@@ -200,7 +200,7 @@ class LivePriceStore:
 
     def update_binance_direct(self, asset: str, price: float, qty: Optional[float] = None) -> None:
         if asset not in self.binance_direct_history:
-            return
+            self.binance_direct_history[asset] = deque(maxlen=600)
         now = time.time()
         self.binance_direct[asset] = price
         self.binance_direct_ts[asset] = now
@@ -208,8 +208,10 @@ class LivePriceStore:
         self._volatility_cache.pop(asset, None)
         # downsampled point for range5 (the maxlen=600 aggTrade deque is too
         # short for a 5-min window; keep one sample every RANGE_SAMPLE_SECS)
-        rh = self.range_history.get(asset)
-        if rh is not None and (not rh or (now - rh[-1][0]) >= RANGE_SAMPLE_SECS):
+        if asset not in self.range_history:
+            self.range_history[asset] = deque(maxlen=120)
+        rh = self.range_history[asset]
+        if not rh or (now - rh[-1][0]) >= RANGE_SAMPLE_SECS:
             rh.append((now, price))
         # VWAP accumulation (BTC, from Binance aggTrade volume)
         if qty is not None and qty > 0:
@@ -493,10 +495,12 @@ class LivePriceStore:
         return (max(vals) - min(vals)) / mean
 
     def snapshot(self) -> dict:
+        all_assets = set(self.assets) | set(self.chainlink.keys()) | set(self.binance_direct.keys()) | set(self.binance.keys())
+        assets_list = sorted(list(all_assets)) if all_assets else self.assets
         return {
-            "oracle_prices": {a: self.get_oracle_price(a) for a in self.assets},
-            "chainlink_ages": {a: (lambda v: None if v == float("inf") else round(v, 1))(self.get_chainlink_age(a)) for a in self.assets},
-            "sources": {a: self.get_fastest_price(a)[1] for a in self.assets},
+            "oracle_prices": {a: self.get_oracle_price(a) for a in assets_list},
+            "chainlink_ages": {a: (lambda v: None if v == float("inf") else round(v, 1))(self.get_chainlink_age(a)) for a in assets_list},
+            "sources": {a: self.get_fastest_price(a)[1] for a in assets_list},
             "tracked_books": len(self.books),
         }
 
