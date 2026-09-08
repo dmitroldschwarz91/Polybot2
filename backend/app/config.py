@@ -40,7 +40,11 @@ class Settings(BaseSettings):
     """All tunable knobs live here. Secrets come from .env."""
 
     model_config = SettingsConfigDict(
-        env_file=str(PROJECT_ROOT / "config" / ".env"),
+        env_file=(
+            str(PROJECT_ROOT / "config" / ".env"),
+            str(PROJECT_ROOT / ".env"),
+            ".env",
+        ),
         env_file_encoding="utf-8",
         env_prefix="POLY_",
         extra="ignore",
