@@ -128,37 +128,65 @@ class LivePriceStore:
             return
         now = time.time()
         self.chainlink_twap[asset] = value
-        self.chainlink_twap_ts[asset] = now
-        ts_sec = (oracle_ts_ms / 1000.0) if oracle_ts_ms else now
+        if oracle_ts_ms is not None and oracle_ts_ms > 0:
+            ts_sec = (oracle_ts_ms / 1000.0) if oracle_ts_ms > 1e11 else float(oracle_ts_ms)
+        else:
+            ts_sec = now
+        self.chainlink_twap_ts[asset] = ts_sec
         hist = self.chainlink_twap_history[asset]
         if not hist or (ts_sec - hist[-1][0]) >= 1.0:
             hist.append((ts_sec, value))
 
-    def get_chainlink_twap(self, asset: str, max_age: float = 120.0) -> Optional[float]:
-        """Latest official TWAP value (None if older than max_age)."""
+    def get_chainlink_twap(self, asset: str, max_age: float = 120.0, window_secs: float = 60.0) -> Optional[float]:
+        """Latest TWAP value (official stream if available, otherwise reconstructed from tick history)."""
+        now = time.time()
         if asset in self.chainlink_twap:
-            if time.time() - self.chainlink_twap_ts.get(asset, 0) <= max_age:
+            if now - self.chainlink_twap_ts.get(asset, 0) <= max_age:
                 return self.chainlink_twap[asset]
-        return None
-
-    def get_twap_at(self, asset: str, t_sec: float, tolerance: float = 10.0) -> Optional[float]:
-        """Official TWAP value whose observation time is nearest to t_sec.
-
-        Used to read the boundary TWAP at an interval's open/close timestamps
-        (open = TWAP at start_ts, close = TWAP at end_ts — the same boundary
-        value for consecutive intervals, hence open(N) == close(N-1)).
-        Returns None if no sample is within `tolerance` seconds of t_sec.
-        """
-        hist = self.chainlink_twap_history.get(asset)
+        # Reconstruct TWAP from 60s sliding window of oracle prices (Chainlink or Binance Direct)
+        cutoff = now - window_secs
+        hist = self.chainlink_history.get(asset)
+        if not hist or len(hist) < 2:
+            hist = self.binance_direct_history.get(asset)
+        if not hist or len(hist) < 2:
+            hist = self.binance_history.get(asset)
         if not hist:
             return None
-        best_val, best_d = None, None
-        for ts, val in hist:
-            d = abs(ts - t_sec)
-            if best_d is None or d < best_d:
-                best_d, best_val = d, val
-        if best_val is not None and best_d is not None and best_d <= tolerance:
-            return best_val
+        vals = []
+        for item in hist:
+            ts_sec = (item[0] / 1000.0) if len(item) == 3 else item[0]
+            price = item[2] if len(item) == 3 else item[1]
+            if ts_sec >= cutoff:
+                vals.append(price)
+        if vals:
+            return sum(vals) / len(vals)
+        return None
+
+    def get_twap_at(self, asset: str, t_sec: float, tolerance: float = 10.0, window_secs: float = 60.0) -> Optional[float]:
+        """TWAP value whose observation time is nearest to t_sec."""
+        hist = self.chainlink_twap_history.get(asset)
+        if hist:
+            best_val, best_d = None, None
+            for ts, val in hist:
+                d = abs(ts - t_sec)
+                if best_d is None or d < best_d:
+                    best_d, best_val = d, val
+            if best_val is not None and best_d is not None and best_d <= tolerance:
+                return best_val
+        # Fallback: compute average over [t_sec - window_secs, t_sec] from history
+        cutoff_start = t_sec - window_secs
+        cutoff_end = t_sec + tolerance
+        ch_hist = self.chainlink_history.get(asset) or self.binance_direct_history.get(asset) or self.binance_history.get(asset)
+        if not ch_hist:
+            return None
+        vals = []
+        for item in ch_hist:
+            ts_sec = (item[0] / 1000.0) if len(item) == 3 else item[0]
+            price = item[2] if len(item) == 3 else item[1]
+            if cutoff_start <= ts_sec <= cutoff_end:
+                vals.append(price)
+        if vals:
+            return sum(vals) / len(vals)
         return None
 
     def update_binance(self, asset: str, price: float) -> None:
