@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Demo trading engine — live market data, virtual money.
 
@@ -1176,9 +1177,10 @@ class DemoEngine:
             return None
         up_won = close_val >= open_val
         result = up_won if pos.direction == "UP" else (not up_won)
+        outcome_str = "WIN" if result else "LOSS"
         c_str = f"${close_val:.4f}" if close_val < 10.0 else f"${close_val:.2f}"
-        o_str = f"${open_val:.4f}" if open_val < 10.0 else f"${open_val:.2f}"   
-     self.log.info(f"[DEMO] official TWAP: close={c_str} vs open={o_str} → {'WIN' if result else 'LOSS'}")
+        o_str = f"${open_val:.4f}" if open_val < 10.0 else f"${open_val:.2f}"
+        self.log.info(f"[DEMO] official TWAP: close={c_str} vs open={o_str} -> {outcome_str}")
         return result
 
     def _resolve_from_chainlink_history(self, pos: DemoPosition) -> Optional[bool]:
