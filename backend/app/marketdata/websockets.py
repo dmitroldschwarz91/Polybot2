@@ -120,26 +120,40 @@ class WebSocketManager:
     # ── Binance direct ───────────────────────────────────────────────────
 
     async def _run_binance_direct(self) -> None:
-        streams = "/".join(self.s.binance_streams)
-        url = f"{self.s.binance_ws_direct}/{streams}"
+        # Build streams dynamically based on active assets
+        streams = [f"{self.s.binance_symbols_ws.get(a, a.lower() + 'usdt')}@aggTrade" for a in self.s.assets]
+        if len(streams) == 1:
+            url = f"wss://stream.binance.com:9443/ws/{streams[0]}"
+        else:
+            url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
+        
         symbol_map = {v.upper(): k for k, v in self.s.binance_symbols_ws.items()}
+        for a in self.s.assets:
+            symbol_map[f"{a.upper()}USDT"] = a
+         
         while True:
             try:
                 async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
-                    self.log.info("[WS-BINANCE-DIRECT] Connected")
+                    self.log.info(f"[WS-BINANCE-DIRECT] Connected ({len(streams)} streams)")
                     async for raw in ws:
                         try:
                             msg = json.loads(raw)
-                            asset = symbol_map.get(msg.get("s", "").upper())
-                            price = float(msg.get("p", 0))
-                            qty = float(msg.get("q", 0))
+                            # Handle combined stream wrapper {"stream": "...", "data": {...}} vs single stream
+                            data = msg.get("data", msg) if isinstance(msg, dict) else {}
+                            sym = data.get("s", "").upper()
+                            asset = symbol_map.get(sym)
+                            price = float(data.get("p", 0))
+                            qty = float(data.get("q", 0))
                             if asset and price:
                                 self.prices.update_binance_direct(asset, price, qty)
                         except Exception:
                             continue
+            except (websockets.exceptions.ConnectionClosed, ConnectionError, OSError) as e:
+                self.log.warning(f"[WS-BINANCE-DIRECT] Reconnecting: {e}")
+                await asyncio.sleep(2)
             except Exception as e:
-                self.log.warning("[WS-BINANCE-DIRECT] Reconnecting", error=str(e))
-                await asyncio.sleep(1)
+                self.log.warning("[WS-BINANCE-DIRECT] Error", error=str(e))
+                await asyncio.sleep(2)
 
     # ── Polymarket RTDS (Chainlink + Binance) ────────────────────────────
 
@@ -152,7 +166,7 @@ class WebSocketManager:
         # Official Chainlink TWAP (authoritative resolution feed). filters=""
         # subscribes to every symbol; we filter by payload.symbol below.
         if self.s.chainlink_twap_enabled:
-            subs.append({"topic": "crypto_prices_twap_thirty", "type": "*", "filters": ""})
+            subs.append({"topic": "crypto_prices_twap_thirty", "type": "*", "filters": ""})         
             subs.append({"topic": "crypto_prices_twap_sixty", "type": "*", "filters": ""})
             subs.append({"topic": "crypto_prices_twap", "type": "*", "filters": ""})
         sub = json.dumps({"action": "subscribe", "subscriptions": subs})
