@@ -9,11 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from ..config import Settings
+
+
+class BotStartRequest(BaseModel):
+    strategy: Optional[str] = None
+    assets: Optional[List[str]] = None
 
 
 def create_router(engine, settings: Settings) -> APIRouter:
@@ -25,13 +31,20 @@ def create_router(engine, settings: Settings) -> APIRouter:
                                      engine.prices, engine.balance.state, settings.paper_trading)
 
     @router.post("/api/bot/start")
-    async def start_bot(strategy: Optional[str] = None):
+    async def start_bot(req: Optional[BotStartRequest] = None, strategy: Optional[str] = None):
         if engine.status.running:
             return {"ok": True, "msg": "already running"}
-        if strategy:
-            settings.trading_strategy = strategy
+        strat = (req.strategy if req and req.strategy else None) or strategy
+        if strat:
+            settings.trading_strategy = strat
+        if req and req.assets and len(req.assets) > 0:
+            cleaned_assets = [a.strip().upper() for a in req.assets if a.strip()]
+            if cleaned_assets:
+                settings.assets = cleaned_assets
+                engine.s.assets = cleaned_assets
+                engine.prices.set_assets(cleaned_assets)
         await engine.start()
-        return {"ok": True, "strategy": settings.trading_strategy}
+        return {"ok": True, "strategy": settings.trading_strategy, "assets": settings.assets}
 
     @router.post("/api/bot/stop")
     async def stop_bot():

@@ -122,7 +122,7 @@ class WebSocketManager:
     async def _run_binance_direct(self) -> None:
         streams = "/".join(self.s.binance_streams)
         url = f"{self.s.binance_ws_direct}/{streams}"
-        symbol_map = {"BTCUSDT": "BTC", "ETHUSDT": "ETH"}
+        symbol_map = {v.upper(): k for k, v in self.s.binance_symbols_ws.items()}
         while True:
             try:
                 async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:

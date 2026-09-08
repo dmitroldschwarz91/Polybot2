@@ -120,10 +120,19 @@ class MarketData:
                 asset = a
                 break
         if asset is None:
-            if "bitcoin" in question_lower or "btc" in question_lower:
-                asset = "BTC"
-            elif "ethereum" in question_lower or "eth" in question_lower:
-                asset = "ETH"
+            for known in ("BTC", "ETH", "SOL", "XRP"):
+                if known.lower() in slug_lower:
+                    asset = known
+                    break
+            if asset is None:
+                if "bitcoin" in question_lower or "btc" in question_lower:
+                    asset = "BTC"
+                elif "ethereum" in question_lower or "eth" in question_lower:
+                    asset = "ETH"
+                elif "solana" in question_lower or "sol" in question_lower:
+                    asset = "SOL"
+                elif "xrp" in question_lower or "ripple" in question_lower:
+                    asset = "XRP"
         return {
             "slug": slug,
             "asset": asset,
@@ -190,9 +199,7 @@ class MarketData:
         return None
 
     async def _binance_open_price(self, asset: str, interval_ts: int) -> Optional[float]:
-        symbol = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}.get(asset)
-        if not symbol:
-            return None
+        symbol = self.s.binance_symbols_ws.get(asset, f"{asset}usdt").upper()
         data = await self.http.get(
             f"{self.s.binance_api}/klines",
             {"symbol": symbol, "interval": "1m", "startTime": interval_ts * 1000, "limit": 1},

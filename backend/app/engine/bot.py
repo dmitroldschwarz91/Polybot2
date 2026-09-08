@@ -13,14 +13,14 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..config import Settings
 from ..core.http import AsyncHTTP, run_sync
 from ..core.logging import StructuredLogger, build_logger
 from ..db.database import Database
 from ..domain.enums import CloseReason, EntryType
-from ..domain.models import Position, TradeStats
+from ..domain.models import Position, TradeStats, polymarket_dynamic_taker_fee
 from ..domain.resolution import (
     cross_validate, gamma_outcome, leader_token_outcome, late_truth_outcome,
 )
@@ -196,10 +196,19 @@ class TradingEngine:
                 if last_interval != cur:
                     if last_interval != 0:
                         self.balance.state.intervals_passed += 1
-                        self.traded = await self._cleanup(cur)
+                        self.traded, interval_pnl = await self._cleanup(cur)
                         if self.known_tokens:
                             self.prices.cleanup_old_tokens(self.known_tokens)
                             self.known_tokens.clear()
+                        # Delayed balance post-audit (+60s) to allow on-chain settlement to finalize
+                        asyncio.create_task(
+                            self._delayed_balance_post_audit(
+                                interval_num=self.balance.state.intervals_passed,
+                                interval_ts=last_interval,
+                                expected_pnl=interval_pnl,
+                                delay=60.0
+                            )
+                        )
                     last_interval = cur
                     snapshot_done = False
                     # FavDip: reset oracle accumulator on new interval
@@ -422,6 +431,7 @@ class TradingEngine:
             return
 
         pos = strat.build_position(market["slug"], asset, opp, result, market["end_ts"])
+        pos.fee_paid = polymarket_dynamic_taker_fee(asize, ap)
         if self.s.hold_to_resolution:
             pos.take_profit_price = 999.0  # never triggers
             pos.stop_loss_price = 0.0      # never triggers
@@ -505,12 +515,13 @@ class TradingEngine:
         if self.prices.binance:
             self.log.info("Binance OK", assets=list(self.prices.binance.keys()))
 
-    async def _cleanup(self, cur_ts: int) -> Set[str]:
-        """Clean up expired positions with REAL winner check."""
+    async def _cleanup(self, cur_ts: int) -> Tuple[Set[str], float]:
+        """Clean up expired positions with REAL winner check. Returns (traded_set, interval_pnl)."""
         now = time.time()
         cutoff = now - self.s.interval_minutes * 60 * 2
         self.fills.orders = {k: v for k, v in self.fills.orders.items() if v.get("last_ts", 0) > cutoff}
         self.market_data.cleanup_caches()
+        interval_resolved_pnl = 0.0
         
         for slug, pos in list(self.positions.items()):
             # FavDip pair_locked: both legs filled -> guaranteed 0.98
@@ -524,6 +535,7 @@ class TradingEngine:
                 self.stats.record(pnl, pos.entry_type, CloseReason.EXPIRED)
                 self.risk.record_realized_pnl(pnl)
                 self.status.bot_balance += proceeds - fee  # FIX: was += pnl (double-counted cost)
+                interval_resolved_pnl += pnl
                 self.log.info(f"[{pos.asset}] RESOLVE PAIR LOCKED pnl=${pnl:+.2f}")
                 await self.db.save_trade(pos)
                 self.positions.pop(slug, None)
@@ -601,27 +613,27 @@ class TradingEngine:
                 if won is None:
                     continue
 
-                # Balance FIX: add proceeds (cost was already deducted at entry).
-                # The old `+= pnl` double-counted entry_cost on every WIN/LOSS.
-                # Now matches the demo engine's accounting convention.
+                # Polymarket crypto taker fee: dynamic formula C * 0.07 * p * (1 - p)
+                dyn_fee = pos.fee_paid or polymarket_dynamic_taker_fee(pos.current_size, pos.entry_price)
                 if won:
-                    proceeds = pos.current_size * 1.0
-                    fee = proceeds * self.s.backtest_taker_fee
-                    pnl = proceeds - pos.entry_cost - fee
-                    self.status.bot_balance += proceeds - fee
+                    proceeds = pos.current_size * 1.0  # $1 per winning contract, 0% winnings fee
+                    pnl = proceeds - pos.entry_cost
+                    self.status.bot_balance += proceeds
                 else:
+                    proceeds = 0.0
                     pnl = -pos.entry_cost
                     self.status.bot_balance += 0.0
 
                 pos.record_close(CloseReason.EXPIRED, pnl)
                 self.stats.record(pnl, pos.entry_type, CloseReason.EXPIRED)
                 self.risk.record_realized_pnl(pnl)
+                interval_resolved_pnl += pnl
                 tag = "✓ WIN" if won else "✗ LOSS"
-                self.log.info(f"[{pos.asset}] RESOLVE {tag} pnl=${pnl:+.2f} method={resolve_method}",
+                self.log.info(f"[{pos.asset}] RESOLVE {tag} pnl=${pnl:+.2f} dyn_fee=${dyn_fee:.4f} method={resolve_method}",
                               chainlink_won=_cl_won, token_won=_tok_won, agree=_agree)
                 self._log_resolution(pos, won, pnl,
                                      proceeds if won else 0.0,
-                                     fee if won else 0.0,
+                                     dyn_fee,
                                      resolve_method, _cl_won, _tok_won, _agree)
                 # late ground-truth recheck (measures real Chainlink error rate)
                 if self.s.cross_late_snapshot:
@@ -636,7 +648,27 @@ class TradingEngine:
             if pos.closed:
                 self.positions.pop(slug, None)
                 
-        return {s for s in self.traded if str(cur_ts) in s}
+        return {s for s in self.traded if str(cur_ts) in s}, interval_resolved_pnl
+
+    async def _delayed_balance_post_audit(self, interval_num: int, interval_ts: int,
+                                         expected_pnl: float, delay: float = 60.0) -> None:
+        """Wait 60s for on-chain Polymarket CTF settlement to finalize, then audit and sync balance to platform truth."""
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            res = self.balance.reconcile_with_platform(
+                interval_num=interval_num,
+                expected_pnl=expected_pnl,
+                interval_ts=interval_ts,
+                audit_delay_secs=delay
+            )
+            if res.get("success") and res.get("reconciled"):
+                self.status.bot_balance = res["bot_snap"]
+                self.risk.update_peak(self.status.bot_balance)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            self.log.warning(f"Delayed balance post-audit error", error=str(e))
 
     def _resolve_from_twap(self, pos: Position) -> Optional[bool]:
         """Authoritative resolution via the OFFICIAL Chainlink TWAP stream.
@@ -725,6 +757,7 @@ class TradingEngine:
             "cost": pos.entry_cost,
             "proceeds": round(proceeds, 4),
             "fee": round(fee, 4),
+            "fee_type": "dynamic_polymarket",
             "resolve_method": method,
             "chainlink_won": cl_won,
             "token_won": tok_won,

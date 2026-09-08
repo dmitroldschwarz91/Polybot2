@@ -44,6 +44,9 @@ class Position:
     target_price: Optional[float] = None
     entry_deviation: Optional[float] = None
 
+    # ── Dynamic Fee Tracking ──
+    fee_paid: float = 0.0
+
     # ── Vacuum-scalp TP plumbing ──
     sl_in_progress: bool = False
     tp_order_id: Optional[str] = None
@@ -57,6 +60,19 @@ class Position:
     leg2_price: float = 0.0
     leg2_filled: bool = False
 
+
+def polymarket_dynamic_taker_fee(shares: float, price: float, fee_rate: float = 0.07) -> float:
+    """Polymarket CLOB dynamic taker fee formula for crypto markets:
+    fee = C * feeRate * p * (1 - p)
+    where:
+      C = shares (number of contracts)
+      p = fill price (0.0 < p < 1.0)
+      feeRate = 0.07 (7.0% rate parameter for crypto 5m/15m)
+    Peaks at p=0.50 ($1.75 per 100 shares), shrinks to $0.63 at p=0.90.
+    """
+    p = max(0.001, min(0.999, float(price)))
+    return round(float(shares) * float(fee_rate) * p * (1.0 - p), 4)
+    
     # ── Close state ──
     closed: bool = False
     close_reason: Optional[CloseReason] = None
