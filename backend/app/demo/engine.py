@@ -181,13 +181,6 @@ class DemoEngine:
         self.strategy_name = strategy
         chosen_assets = [a.strip().upper() for a in assets] if assets else list(settings.assets)
 
-        # ── shared infrastructure with the live bot ──
-        self.prices = LivePriceStore(chosen_assets, settings.ws_book_stale_secs)
-        self.fills = type("F", (), {"orders": {}})()  # dummy fill store
-        self.http = AsyncHTTP()
-        self.ws = WebSocketManager(settings, self.prices, self.fills, self.log)
-        self.book_poller = BookPoller(settings, self.prices, self.log, poll_interval=5.0)
-        self.market_data = MarketData(settings, self.prices, self.http, self.log)
         # strategy + risk
         self.s_demo = settings.model_copy()
         self.s_demo.vacuum_scalp_enabled = True
@@ -198,6 +191,15 @@ class DemoEngine:
         # лимиты 30/50% будут ложно стопить. 1.0 = никогда не сработают.
         self.s_demo.max_daily_loss_pct = 1.0
         self.s_demo.max_drawdown_pct = 1.0
+        self.s = self.s_demo
+
+        # ── isolated demo infrastructure ──
+        self.prices = LivePriceStore(chosen_assets, self.s_demo.ws_book_stale_secs)
+        self.fills = type("F", (), {"orders": {}})()  # dummy fill store
+        self.http = AsyncHTTP()
+        self.ws = WebSocketManager(self.s_demo, self.prices, self.fills, self.log)
+        self.book_poller = BookPoller(self.s_demo, self.prices, self.log, poll_interval=5.0)
+        self.market_data = MarketData(self.s_demo, self.prices, self.http, self.log)
 
         self._pf = None                       # PairFirst strategy instance (if active)
         self._pair_target = ZPAIR_TARGET_SUM  # leg2 completion target (overridden by pair_first)
@@ -406,13 +408,16 @@ class DemoEngine:
 
         # evaluate entries
         for asset, market in zip(self.s_demo.assets, markets):
-            if not market:
-                continue
-
-            stc = market["end_ts"] - time.time()
+            effective_market = market if (market and isinstance(market, dict)) else {
+                "slug": f"{asset.lower()}-updown-{self.s.interval_minutes}m-{self._cur_interval or self.market_data.current_interval_ts()}",
+                "asset": asset,
+                "end_ts": (self._cur_interval or self.market_data.current_interval_ts()) + self.s.interval_minutes * 60,
+                "target_price": self.market_data.start_prices.get(str(self._cur_interval or self.market_data.current_interval_ts()), {}).get(asset),
+            }
+            stc = effective_market["end_ts"] - time.time()
 
             # ── interval sample: whole interval (1s), for later filter reconstruction ──
-            self._sample_interval(market, asset, stc)
+            self._sample_interval(effective_market, asset, stc)
 
             # ── ZPair: накопление oracle с начала интервала, 1 точка/сек (как в бэктесте) ──
             _op_now = self.prices.get_oracle_price(asset)
@@ -422,6 +427,9 @@ class DemoEngine:
                     self._zpair_last_ts[asset] = _tn
                     self._zpair_prices.setdefault(asset, []).append(_op_now)
 
+            if not market:
+                continue
+             
             # ── ZScoreReversal: trailing exits (every tick) + entry in window ──
             if self.strategy_name == "zscore_reversal":
                 self._check_trailing_exits()
@@ -1073,7 +1081,7 @@ class DemoEngine:
                     self.log.warning(
                         f"[DEMO] CROSS-DISAGREE {pos.slug}: Chainlink="
                         f"{'WIN' if _cl_won else 'LOSS'} vs token="
-                        f"{'WIN' if _tok_won else 'LOSS'} → UNRESOLVED (neutral)",
+                        f"{'WIN' if _tok_won else 'LOSS'} -> UNRESOLVED (neutral)",
                         slug=pos.slug, asset=pos.asset,
                         chainlink_won=_cl_won, token_won=_tok_won, agree=_agree)
                 else:
@@ -1220,13 +1228,18 @@ class DemoEngine:
             return None
         up_won = best_price >= sp
         result = up_won if pos.direction == "UP" else (not up_won)
+        outcome_str = "WIN" if result else "LOSS"
         bp_str = f"${best_price:.4f}" if best_price < 10.0 else f"${best_price:.2f}"
         sp_str = f"${sp:.4f}" if sp < 10.0 else f"${sp:.2f}"
-        self.log.info(f"[DEMO] local TWAP reconst({len(twap)}pts): {bp_str} vs {sp_str} → {'WIN' if result else 'LOSS'}")
+        self.log.info(f"[DEMO] local TWAP reconst({len(twap)}pts): {bp_str} vs {sp_str} -> {outcome_str}")
         return result
 
     async def _wait_for_feeds(self) -> None:
         self.log.info("[DEMO] Waiting for WebSocket data...")
+        try:
+            await self.market_data.seed_prices()
+        except Exception as e:
+            self.log.debug(f"[DEMO] REST seed failed: {e}")
         for _ in range(50):
             if self.prices.chainlink or self.prices.binance or self.prices.binance_direct:
                 break
@@ -1256,7 +1269,8 @@ class DemoEngine:
         self._last_sample_ts[key] = time.time()
 
         op = self.prices.get_oracle_price(asset)
-        start_p = market.get("target_price")
+        cur_int = self._cur_interval or self.market_data.current_interval_ts()
+        start_p = market.get("target_price") or self.market_data.start_prices.get(str(cur_int), {}).get(asset)
         _now = time.time()
         _ages = []
         for _src in (self.prices.chainlink_ts.get(asset),
@@ -1271,8 +1285,10 @@ class DemoEngine:
         twap = self.prices.get_chainlink_twap(asset)
         _twap_ts = self.prices.chainlink_twap_ts.get(asset)
         twap_age = round(_now - _twap_ts, 1) if _twap_ts else None
-        twap_open = (self.prices.get_twap_at(asset, float(self._cur_interval))
+        twap_open = (self.prices.get_twap_at(asset, float(cur_int))
                      if self.s.chainlink_twap_enabled else None)
+        if twap_open is None:
+            twap_open = start_p
         leader = (market["up_token_id"] if (op and start_p and op >= start_p)
                   else market.get("down_token_id")) if (op and start_p) else None
         tok, bid_vol, ask_vol, alive = None, 0, 0, False
