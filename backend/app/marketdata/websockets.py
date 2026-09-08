@@ -153,6 +153,8 @@ class WebSocketManager:
         # subscribes to every symbol; we filter by payload.symbol below.
         if self.s.chainlink_twap_enabled:
             subs.append({"topic": "crypto_prices_twap_thirty", "type": "*", "filters": ""})
+            subs.append({"topic": "crypto_prices_twap_sixty", "type": "*", "filters": ""})
+            subs.append({"topic": "crypto_prices_twap", "type": "*", "filters": ""})
         sub = json.dumps({"action": "subscribe", "subscriptions": subs})
         while True:
             try:
