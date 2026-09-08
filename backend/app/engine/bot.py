@@ -504,7 +504,8 @@ class TradingEngine:
                 allow_fb = secs_from_start >= self.s.start_price_chainlink_grace_secs
                 sp = await self.market_data.get_or_set_start_price(asset, cur, allow_fallback=allow_fb)
                 if sp is not None:
-                    self.log.info(f"[{asset}] Start price set", price=f"${sp:.2f}")
+                    p_str = f"${sp:.4f}" if sp < 10.0 else f"${sp:.2f}"
+                    self.log.info(f"[{asset}] Start price set", price=p_str)
 
     async def _wait_for_feeds(self) -> None:
         self.log.info("Waiting for WebSocket data...")
@@ -693,7 +694,9 @@ class TradingEngine:
         if open_val is None:
             return None
         up_won = close_val >= open_val
-        self.log.info(f"[{pos.asset}] official TWAP: close=${close_val:.2f} vs open=${open_val:.2f}")
+        c_str = f"${close_val:.4f}" if close_val < 10.0 else f"${close_val:.2f}"
+        o_str = f"${open_val:.4f}" if open_val < 10.0 else f"${open_val:.2f}"
+        self.log.info(f"[{pos.asset}] official TWAP: close={c_str} vs open={o_str}")
         return up_won if pos.direction == "UP" else (not up_won)
 
     def _resolve_from_history(self, pos: Position) -> Optional[bool]:
