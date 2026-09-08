@@ -154,6 +154,10 @@ class TradeStats:
     vacuum_scalp_wins: int = 0
     vacuum_scalp_losses: int = 0
     vacuum_scalp_pnl: float = 0.0
+    twap_inertia_count: int = 0
+    twap_inertia_wins: int = 0
+    twap_inertia_losses: int = 0
+    twap_inertia_pnl: float = 0.0
     partial_tps: int = 0
     trailing_exits: int = 0
     stop_losses: int = 0
@@ -164,15 +168,15 @@ class TradeStats:
 
     @property
     def total_trades(self) -> int:
-        return self.early_trend_count + self.standard_count + self.vacuum_scalp_count
+        return self.early_trend_count + self.standard_count + self.vacuum_scalp_count + self.twap_inertia_count
 
     @property
     def total_pnl(self) -> float:
-        return self.early_trend_pnl + self.standard_pnl + self.vacuum_scalp_pnl
+        return self.early_trend_pnl + self.standard_pnl + self.vacuum_scalp_pnl + self.twap_inertia_pnl
 
     @property
     def win_rate(self) -> float:
-        w = self.early_trend_wins + self.standard_wins + self.vacuum_scalp_wins
+        w = self.early_trend_wins + self.standard_wins + self.vacuum_scalp_wins + self.twap_inertia_wins
         return w / self.total_trades if self.total_trades else 0.0
 
     def record(self, pnl: float, et: EntryType, reason: CloseReason) -> None:
@@ -190,6 +194,13 @@ class TradeStats:
                 self.vacuum_scalp_wins += 1
             elif pnl < 0:
                 self.vacuum_scalp_losses += 1
+        elif et == EntryType.TWAP_INERTIA:
+            self.twap_inertia_count += 1
+            self.twap_inertia_pnl += pnl
+            if pnl > 0:
+                self.twap_inertia_wins += 1
+            elif pnl < 0:
+                self.twap_inertia_losses += 1
         else:
             self.standard_count += 1
             self.standard_pnl += pnl
@@ -222,6 +233,8 @@ class TradeStats:
                          "wins": self.standard_wins, "losses": self.standard_losses},
             "vacuum_scalp": {"count": self.vacuum_scalp_count, "pnl": self.vacuum_scalp_pnl,
                              "wins": self.vacuum_scalp_wins, "losses": self.vacuum_scalp_losses},
+            "twap_inertia": {"count": self.twap_inertia_count, "pnl": self.twap_inertia_pnl,
+                             "wins": self.twap_inertia_wins, "losses": self.twap_inertia_losses},
             "exits": {"partial_tps": self.partial_tps, "trailing_exits": self.trailing_exits,
                       "stop_losses": self.stop_losses, "early_exits": self.early_exits,
                       "vacuum_tps": self.vacuum_tps, "expired": self.expired_count,
