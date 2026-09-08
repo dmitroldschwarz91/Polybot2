@@ -268,6 +268,12 @@
 const $ = id => document.getElementById(id);
 function fmt(n){ return (n>=0?'+':'')+'$'+Math.abs(n).toFixed(2); }
 function cls(n){ return n>=0?'pos':'neg'; }
+function fmtPrice(p){
+  if(p === null || p === undefined || isNaN(p)) return '—';
+  if(p < 1.0) return Number(p).toFixed(4);
+  if(p < 10.0) return Number(p).toFixed(3);
+  return Number(p).toFixed(2);
+}
 
 // ── переключение вкладок ──
 function switchView(v){
@@ -329,7 +335,7 @@ function render(d){
   var ag = d.prices.chainlink_ages || {};
   var src = d.prices.sources || {};
   $('pricesPanel').innerHTML = Object.keys(op).map(function(a){
-    return '<div class="row"><span class="k">'+a+'</span><span class="v">$'+(op[a]?op[a].toFixed(2):'—')+' <span style="color:var(--muted);font-size:10px;font-family:sans-serif">'+(src[a]||'')+' · '+(ag[a]||0)+'s</span></span></div>';
+    return '<div class="row"><span class="k">'+a+'</span><span class="v">$'+fmtPrice(op[a])+' <span style="color:var(--muted);font-size:10px;font-family:sans-serif">'+(src[a]||'')+' · '+(ag[a]||0)+'s</span></span></div>';
   }).join('');
 }
 
