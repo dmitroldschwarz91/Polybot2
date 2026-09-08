@@ -27,7 +27,7 @@ from .base import BaseStrategy, Opportunity
 
 
 class TWAPInertiaStrategy(BaseStrategy):
-    entry_type = EntryType.VACUUM_SCALP
+    entry_type = EntryType.TWAP_INERTIA
 
     def enabled(self) -> bool:
         return getattr(self.s, "twap_inertia_enabled", True)
@@ -64,7 +64,8 @@ class TWAPInertiaStrategy(BaseStrategy):
             prices.binance_ts.get(asset, 0.0),
         )
 
-        if (now - twap_ts > max_age) or (now - oracle_ts > max_age):
+        effective_feed_ts = max(twap_ts, oracle_ts)
+        if (now - effective_feed_ts) > max_age:
             return Opportunity(can_enter=False, reason="stale_twap_or_oracle_feed")
 
         # 2. Reference prices (Current TWAP and Interval TWAP Open)
