@@ -1178,8 +1178,7 @@ class DemoEngine:
         result = up_won if pos.direction == "UP" else (not up_won)
         c_str = f"${close_val:.4f}" if close_val < 10.0 else f"${close_val:.2f}"
         o_str = f"${open_val:.4f}" if open_val < 10.0 else f"${open_val:.2f}"   
-     self.log.info(
-            f"[DEMO] official TWAP: close={c_str} vs open={o_str} → {'WIN' if result else 'LOSS'}")
+     self.log.info(f"[DEMO] official TWAP: close={c_str} vs open={o_str} → {'WIN' if result else 'LOSS'}")
         return result
 
     def _resolve_from_chainlink_history(self, pos: DemoPosition) -> Optional[bool]:
