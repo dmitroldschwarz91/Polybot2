@@ -362,6 +362,8 @@ class TradingEngine:
                 continue
             if strat.entry_type == EntryType.VACUUM_SCALP and stc <= self.s.vacuum_scalp_entry_end_secs:
                 continue
+            if strat.entry_type == EntryType.TWAP_INERTIA and not (self.s.twap_stc_min <= stc <= self.s.twap_stc_max):
+                continue
 
             opp = strat.check(market, asset, self.traded, self.status.bot_balance,
                               self.prices, self.market_data, self.risk,
@@ -394,7 +396,7 @@ class TradingEngine:
             stake = self.risk.vacuum_scalp_stake(self.status.bot_balance, imb)
         else:
             avail = await run_sync(self.client.get_real_balance)
-            effective = min(self.status.bot_balance, avail) if avail is not None else self.status.bot_balance
+            effective = min(self.status.bot_balance, avail) if (avail is not None and not self.client.paper) else self.status.bot_balance
             stake = self.risk.stake_with_imbalance(effective, imb)
         if stake <= 0:
             return
