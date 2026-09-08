@@ -130,7 +130,11 @@ class BookPoller:
         active = self._prune_tokens()
         if not active:
             return
-        tasks = [self._poll_token(tid) for tid in active]
+        sem = asyncio.Semaphore(6)
+        async def _bounded_poll(tid: str):
+            async with sem:
+                await self._poll_token(tid)
+        tasks = [_bounded_poll(tid) for tid in active]
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _poll_token(self, token_id: str) -> None:
