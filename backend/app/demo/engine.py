@@ -478,15 +478,22 @@ class DemoEngine:
                 stc_str = f"{int(stc)}s"
                 op_str = f"${op:.2f}" if op else "None"
                 tok_str = f"${tok_price:.3f}" if tok_price else "None"
-                phase = "WINDOW" if (DEMO_ENTRY_END < stc <= DEMO_ENTRY_START) else "WAIT"
+                if self.strategy_name == "twap_inertia":
+                    phase = "TWAP_WINDOW" if (self.s.twap_stc_min <= stc <= self.s.twap_stc_max) else "WAIT"
+                else:
+                    phase = "WINDOW" if (DEMO_ENTRY_END < stc <= DEMO_ENTRY_START) else "WAIT"
                 self.log.info(
                     f"[DEMO] STATUS {asset} | stc={stc_str} ({phase}) | "
                     f"oracle={op_str} | leader_tok={tok_str}"
                 )
 
             # Skip if outside the entry window
-            if stc <= DEMO_ENTRY_END or stc > DEMO_ENTRY_START:
-                continue
+            if self.strategy_name == "twap_inertia":
+                if not (self.s.twap_stc_min <= stc <= self.s.twap_stc_max):
+                    continue
+            else:
+                if stc <= DEMO_ENTRY_END or stc > DEMO_ENTRY_START:
+                    continue
 
             if market["slug"] in self.traded:
                 continue
