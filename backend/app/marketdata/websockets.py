@@ -35,13 +35,14 @@ from .stores import FillStore, LivePriceStore
 # 5-minute markets die after 5-10 minutes, so 15 minutes is a safe TTL.
 SUBSCRIPTION_TTL_SECS = 900
 
-# Dead-stream detection: Polymarket's market WS sometimes silently stops
-# sending updates while keeping the TCP connection (and ping/pong) alive.
-# `ping_timeout` does NOT catch this, so the recv loop would block forever
-# and bid_volume/ask_volume would silently drop to 0. When no message arrives
-# for this many seconds, we force a reconnect (which re-subscribes to active
-# tokens and restores the order-book feed).
-DEAD_STREAM_SECS = 10.0
+# Dead-stream detection thresholds:
+# Polymarket RTDS and Market channels push updates on-event. During low volatility,
+# Chainlink heartbeats on Polygon fire every 20-60 seconds, and quiet token orderbooks
+# can have no price updates for 30-60 seconds without being dead.
+# Setting thresholds to 120s / 90s prevents false-alarm reconnect spam while still
+# catching actual frozen TCP connections.
+DEAD_STREAM_RTDS_SECS = 90.0
+DEAD_STREAM_MARKET_SECS = 10.0
 
 
 def _ws_is_open(ws) -> bool:
@@ -173,21 +174,17 @@ class WebSocketManager:
         while True:
             try:
                 async with websockets.connect(
-                    self.s.ws_rtds_url, ping_interval=self.s.ws_heartbeat_interval, ping_timeout=10
+                    self.s.ws_rtds_url, ping_interval=20, ping_timeout=20
                 ) as ws:
                     await ws.send(sub)
-                    self.log.info("[WS-RTDS] Connected")
-                    # Dead-stream detection (same pattern as the market WS):
-                    # RTDS can go silent while keeping TCP+pings alive, stalling
-                    # the Chainlink/TWAP/Binance feeds. Poll recv() with a short
-                    # timeout and force a reconnect when silent > DEAD_STREAM_SECS.
+                    self.log.info("[WS-RTDS] Connected")                    
                     last_msg = time.time()
                     while True:
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
                         except asyncio.TimeoutError:
                             silent = time.time() - last_msg
-                            if silent >= DEAD_STREAM_SECS:
+                            if silent >= DEAD_STREAM_RTDS_SECS:
                                 self.log.warning(
                                     f"[WS-RTDS] silent for {silent:.0f}s "
                                     f"(oracle/TWAP feed stalled) — forcing reconnect")
@@ -277,7 +274,7 @@ class WebSocketManager:
         while True:
             try:
                 async with websockets.connect(
-                    self.s.ws_market_url, ping_interval=self.s.ws_heartbeat_interval, ping_timeout=10
+                    self.s.ws_market_url, ping_interval=20, ping_timeout=20
                 ) as ws:
                     self._market_ws = ws
                     self.log.info("[WS-MARKET] Connected")
@@ -288,20 +285,13 @@ class WebSocketManager:
                         self.log.info("[WS-MARKET] Re-subscribed to active tokens",
                                       tokens=len(active))
                     # ── Dead-stream detection ─────────────────────────────
-                    # Polymarket market WS sometimes silently stops sending
-                    # updates while keeping the connection (and ping) alive.
-                    # The blocking `async for raw in ws:` would wait forever,
-                    # leaving bid_volume/ask_volume stuck at 0. We poll recv()
-                    # with a short timeout and force a reconnect when no data
-                    # arrives for DEAD_STREAM_SECS — the outer loop then
-                    # reconnects and re-subscribes to active tokens.
                     last_msg = time.time()
                     while True:
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
                         except asyncio.TimeoutError:
                             silent = time.time() - last_msg
-                            if silent >= DEAD_STREAM_SECS:
+                            if silent >= DEAD_STREAM_MARKET_SECS:
                                 self.dead_stream_reconnects += 1
                                 self.log.warning(
                                     f"[WS-MARKET] silent for {silent:.0f}s — book "
@@ -431,7 +421,7 @@ class WebSocketManager:
                 continue
             try:
                 async with websockets.connect(
-                    self.s.ws_user_url, ping_interval=self.s.ws_heartbeat_interval, ping_timeout=10
+                    self.s.ws_user_url, ping_interval=20, ping_timeout=20
                 ) as ws:
                     await ws.send(json.dumps({"type": "user", "auth": self.api_creds}))
                     self.log.info("[WS-USER] Connected")
