@@ -9,6 +9,7 @@ class EntryType(str, Enum):
     HIGH_PRICE = "HIGH_PRICE"
     IMBALANCE = "IMBALANCE"
     VACUUM_SCALP = "VACUUM_SCALP"
+    TWAP_INERTIA = "TWAP_INERTIA"
 
 
 class CloseReason(str, Enum):
