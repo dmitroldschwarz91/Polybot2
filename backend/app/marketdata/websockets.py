@@ -58,6 +58,17 @@ def _ws_is_open(ws) -> bool:
     return True
 
 
+def normalize_asset(sym: str) -> Optional[str]:
+    """Normalize any crypto symbol variation to canonical uppercase asset ('BTC', 'ETH', 'SOL', 'XRP')."""
+    if not sym:
+        return None
+    s = sym.upper().replace("/", "").replace("-", "").replace("_", "").strip()
+    for base in ("BTC", "ETH", "SOL", "XRP"):
+        if s == base or s.startswith(base + "USD") or s == (base + "T") or s.startswith(base):
+            return base
+    return None
+
+
 class WebSocketManager:
     """Owns and supervises all four WS feeds as background tasks."""
 
@@ -121,48 +132,48 @@ class WebSocketManager:
     # ── Binance direct ───────────────────────────────────────────────────
 
     async def _run_binance_direct(self) -> None:
-        # Build streams dynamically based on active assets
-        streams = [f"{self.s.binance_symbols_ws.get(a, a.lower() + 'usdt')}@aggTrade" for a in self.s.assets]
-        if len(streams) == 1:
-            url = f"wss://stream.binance.com:9443/ws/{streams[0]}"
-        else:
-            url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
-        
-        symbol_map = {v.upper(): k for k, v in self.s.binance_symbols_ws.items()}
-        for a in self.s.assets:
-            symbol_map[f"{a.upper()}USDT"] = a
+        # Stream all known crypto symbols to ensure live feeds for all active/demo assets
+        streams = [f"{sym}@aggTrade" for sym in self.s.binance_symbols_ws.values()]
+        url = (f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
+               if len(streams) > 1 else f"wss://stream.binance.com:9443/ws/{streams[0]}")
+        backup_url = (f"wss://data-stream.binance.vision/stream?streams={'/'.join(streams)}"
+                      if len(streams) > 1 else f"wss://data-stream.binance.vision/ws/{streams[0]}")
+        urls = [url, backup_url]
+        url_idx = 0
          
         while True:
+            target_url = urls[url_idx % len(urls)]
             try:
-                async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
+                async with websockets.connect(target_url, ping_interval=20, ping_timeout=10) as ws:
                     self.log.info(f"[WS-BINANCE-DIRECT] Connected ({len(streams)} streams)")
                     async for raw in ws:
                         try:
                             msg = json.loads(raw)
                             # Handle combined stream wrapper {"stream": "...", "data": {...}} vs single stream
                             data = msg.get("data", msg) if isinstance(msg, dict) else {}
-                            sym = data.get("s", "").upper()
-                            asset = symbol_map.get(sym)
+                            sym = data.get("s", "")
+                            asset = normalize_asset(sym)
                             price = float(data.get("p", 0))
                             qty = float(data.get("q", 0))
-                            if asset and price:
+                            if asset and price > 0:
                                 self.prices.update_binance_direct(asset, price, qty)
                         except Exception:
                             continue
             except (websockets.exceptions.ConnectionClosed, ConnectionError, OSError) as e:
                 self.log.warning(f"[WS-BINANCE-DIRECT] Reconnecting: {e}")
+                url_idx += 1
                 await asyncio.sleep(2)
             except Exception as e:
                 self.log.warning("[WS-BINANCE-DIRECT] Error", error=str(e))
+                url_idx += 1
                 await asyncio.sleep(2)
 
     # ── Polymarket RTDS (Chainlink + Binance) ────────────────────────────
 
     async def _run_rtds(self) -> None:
-        bn_symbols = list(self.s.binance_symbols_ws.values())
         subs = [
             {"topic": "crypto_prices_chainlink", "type": "*", "filters": ""},
-            {"topic": "crypto_prices", "type": "update", "filters": json.dumps(bn_symbols)},
+            {"topic": "crypto_prices", "type": "*", "filters": ""},
         ]
         # Official Chainlink TWAP (authoritative resolution feed). filters=""
         # subscribes to every symbol; we filter by payload.symbol below.
@@ -191,7 +202,13 @@ class WebSocketManager:
                                 break  # → outer loop reconnects + re-subscribes
                             continue
                         last_msg = time.time()
-                        if raw == "PONG":
+                        if raw == "PING" or raw.strip() == "PING":
+                            try:
+                                await ws.send("PONG")
+                            except Exception:
+                                pass
+                            continue
+                        if raw == "PONG" or raw.strip() == "PONG":
                             continue
                         await self._handle_rtds(raw)
             except (websockets.exceptions.ConnectionClosed, ConnectionError, OSError) as e:
@@ -206,67 +223,54 @@ class WebSocketManager:
             msg = json.loads(raw)
         except json.JSONDecodeError:
             return
-        if not isinstance(msg, dict):
-            return
+        if isinstance(msg, list):
+            for item in msg:
+                if isinstance(item, dict):
+                    self._process_single_rtds(item)
+        elif isinstance(msg, dict):
+            self._process_single_rtds(msg)
+
+    def _process_single_rtds(self, msg: dict) -> None:
         topic = msg.get("topic", "")
         payload = msg.get("payload")
         if not isinstance(payload, dict):
-            return
+            payload = msg
 
-        if topic == "crypto_prices_chainlink":
-            sym = (payload.get("symbol") or "").lower()
-            val = payload.get("value")
-            oracle_ts = payload.get("timestamp")
-            if val is None:
-                return
-            for asset, csym in self.s.chainlink_symbols.items():
-                if sym == csym:
-                    try:
-                        ots = int(float(oracle_ts)) if oracle_ts is not None else None
-                        self.prices.update_chainlink(asset, float(val), ots)
-                    except Exception as e:
-                        self.log.error("[CHAINLINK] update failed", asset=asset, error=repr(e))
-                    break
+        sym = payload.get("symbol") or payload.get("s") or ""
+        asset = normalize_asset(sym)
+        val = (payload.get("value") if payload.get("value") is not None
+               else (payload.get("price") if payload.get("price") is not None
+                     else payload.get("p")))
+        oracle_ts = (payload.get("timestamp") or payload.get("ts")
+                     or payload.get("time") or payload.get("T"))
 
-        elif "twap" in topic:
-            # Official Chainlink TWAP (30-sec lookback). The message topic string
-            # varies by RTDS version ("crypto_prices_twap_thirty" on subscribe
-            # echo vs "prices.crypto.chainlink.twap" in SDK docs), so match by
-            # substring + payload.windowSeconds.
-            sym = (payload.get("symbol") or "").lower()
-            val = payload.get("value")
-            oracle_ts = payload.get("timestamp")
-            if val is None:
-                return
-            if not getattr(self, "_twap_logged", False):
-                self._twap_logged = True
-                # Dump the full first payload so the raw wire format (field names
-                # for value/timestamp) can be verified — the SDK docs add
-                # windowSeconds, but the raw RTDS payload may omit it.
-                self.log.info("[WS-RTDS] first TWAP message received",
-                              topic=topic, symbol=sym,
-                              payload_keys=list(payload.keys()), payload=payload)
-            for asset, csym in self.s.chainlink_symbols.items():
-                if sym == csym:
-                    try:
-                        ots = int(float(oracle_ts)) if oracle_ts is not None else None
-                        self.prices.update_chainlink_twap(asset, float(val), ots)
-                    except Exception as e:
-                        self.log.error("[TWAP] update failed", asset=asset, error=repr(e))
-                    break
+        if "twap" in topic:
+            if val is not None and asset:
+                if not getattr(self, "_twap_logged", False):
+                    self._twap_logged = True
+                    self.log.info("[WS-RTDS] first TWAP message received",
+                                  topic=topic, symbol=sym, asset=asset,
+                                  payload_keys=list(payload.keys()), payload=payload)
+                try:
+                    ots = int(float(oracle_ts)) if oracle_ts is not None else None
+                    self.prices.update_chainlink_twap(asset, float(val), ots)
+                except Exception as e:
+                    self.log.error("[TWAP] update failed", asset=asset, error=repr(e))
 
-        elif topic == "crypto_prices":
-            sym = (payload.get("symbol") or "").lower()
-            val = payload.get("value")
-            if val is None:
-                return
-            for asset, bsym in self.s.binance_symbols_ws.items():
-                if sym == bsym:
-                    try:
-                        self.prices.update_binance(asset, float(val))
-                    except Exception as e:
-                        self.log.error("[BINANCE-RTDS] update failed", asset=asset, error=repr(e))
-                    break
+        elif "chainlink" in topic:
+            if val is not None and asset:
+                try:
+                    ots = int(float(oracle_ts)) if oracle_ts is not None else None
+                    self.prices.update_chainlink(asset, float(val), ots)
+                except Exception as e:
+                    self.log.error("[CHAINLINK] update failed", asset=asset, error=repr(e))
+
+        elif "crypto_prices" in topic or "binance" in topic:
+            if val is not None and asset:
+                try:
+                    self.prices.update_binance(asset, float(val))
+                except Exception as e:
+                    self.log.error("[BINANCE-RTDS] update failed", asset=asset, error=repr(e))
 
     # ── Polymarket market channel ────────────────────────────────────────
 
