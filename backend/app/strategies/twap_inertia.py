@@ -71,7 +71,11 @@ class TWAPInertiaStrategy(BaseStrategy):
         # 2. Reference prices (Current TWAP and Interval TWAP Open)
         cur_twap = prices.get_chainlink_twap(asset, max_age=max_age)
         cur_interval = market_data.current_interval_ts()
-        twap_open = prices.get_twap_at(asset, float(cur_interval)) or market.get("target_price")
+        twap_open = (
+            prices.get_twap_at(asset, float(cur_interval))
+            or market_data.start_prices.get(str(cur_interval), {}).get(asset)
+            or market.get("target_price")
+        )
 
         if not cur_twap or not twap_open or twap_open <= 0:
             return Opportunity(can_enter=False, reason="missing_twap_reference")
@@ -135,7 +139,7 @@ class TWAPInertiaStrategy(BaseStrategy):
 
         # 6. Sizing and Risk Gate
         imb = prices.get_book_imbalance(token_id) if token_id else 0.5
-        stake = risk.vacuum_scalp_stake(bot_balance, imb)
+        stake = risk.twap_inertia_stake(bot_balance) if hasattr(risk, "twap_inertia_stake") else (bot_balance * getattr(s, "max_stake_ratio", 0.20))
         shares = int(stake / token_ask) if token_ask > 0 else 0
 
         # Cap shares to available depth if depth is known
@@ -144,7 +148,8 @@ class TWAPInertiaStrategy(BaseStrategy):
 
         min_order = getattr(s, "min_order_size", 5)
         if shares < min_order:
-            if bot_balance >= min_order * token_ask:
+            min_req_budget = min_order * token_ask
+            if bot_balance >= min_req_budget and min_req_budget <= (bot_balance * getattr(s, "max_stake_ratio", 0.20) * 1.25):
                 shares = min_order
             else:
                 return Opportunity(can_enter=False, reason="insufficient_balance")
