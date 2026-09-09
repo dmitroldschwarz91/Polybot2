@@ -90,6 +90,35 @@ class MarketData:
     def next_interval_ts(self) -> int:
         return self.current_interval_ts() + self.s.interval_minutes * 60
 
+    async def seed_prices(self) -> None:
+        """Fetch initial spot prices via REST to seed LivePriceStore instantly before WS ticks."""
+        endpoints = [
+            "https://api.binance.com/api/v3/ticker/price",
+            "https://data-api.binance.vision/api/v3/ticker/price",
+        ]
+        symbol_map = {
+            "BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT", "XRP": "XRPUSDT"
+        }
+        for ep in endpoints:
+            try:
+                data = await self.http.get(ep, timeout=3.0)
+                if isinstance(data, list):
+                    prices_found = 0
+                    by_sym = {item.get("symbol"): float(item.get("price", 0))
+                              for item in data if isinstance(item, dict) and "symbol" in item}
+                    for asset in self.s.assets:
+                        sym = symbol_map.get(asset, f"{asset}USDT")
+                        if sym in by_sym and by_sym[sym] > 0:
+                            p = by_sym[sym]
+                            self.prices.update_binance_direct(asset, p, 1.0)
+                            self.prices.update_binance(asset, p)
+                            prices_found += 1
+                    if prices_found > 0:
+                        self.log.info(f"Seeded {prices_found} asset prices from REST ({ep.split('/')[2]})")
+                        return
+            except Exception as e:
+                self.log.debug(f"Price seeding attempt failed from {ep}: {e}")
+                
     # ── market fetch ─────────────────────────────────────────────────────
 
     async def fetch_market(self, asset: str) -> Optional[dict]:
