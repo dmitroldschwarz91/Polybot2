@@ -116,3 +116,46 @@ def test_balance_reconcile_with_platform_delayed(tmp_path):
     assert res["bot_snap"] == 107.50
     assert bm.state.prev_bot_snap == 107.50
     assert bm.state.prev_wallet_usdc == 107.50
+
+
+
+def test_normalize_asset():
+    from backend.app.marketdata.websockets import normalize_asset
+    assert normalize_asset("btc/usd") == "BTC"
+    assert normalize_asset("BTC-USD") == "BTC"
+    assert normalize_asset("btcusdt") == "BTC"
+    assert normalize_asset("ETH/USD") == "ETH"
+    assert normalize_asset("ethusdt") == "ETH"
+    assert normalize_asset("sol/usd") == "SOL"
+    assert normalize_asset("solusdt") == "SOL"
+    assert normalize_asset("xrp/usd") == "XRP"
+    assert normalize_asset("xrpusdt") == "XRP"
+    assert normalize_asset("DOGE") is None
+
+
+def test_live_interval_samples_writing(tmp_path):
+    from backend.app.sample_io import load_samples
+    from backend.app.engine.bot import TradingEngine
+    
+    s = Settings()
+    s.log_dir = str(tmp_path)
+    s.assets = ["BTC"]
+    bot = TradingEngine(s)
+    
+    market = {
+        "slug": "btc-updown-5m-1757300000",
+        "up_token_id": "tok_up_123",
+        "down_token_id": "tok_dn_123",
+        "end_ts": 1757300300,
+        "target_price": 95000.0,
+    }
+    
+    bot._sample_interval(market, "BTC", stc=45.0)
+    samples_file = tmp_path / "live_interval_samples.jsonl"
+    assert samples_file.exists()
+    
+    samples = load_samples(samples_file)
+    assert "btc-updown-5m-1757300000" in samples
+    rec = samples["btc-updown-5m-1757300000"][0]
+    assert rec["asset"] == "BTC"
+    assert rec["secs_to_close"] == 45
