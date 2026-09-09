@@ -309,30 +309,24 @@ class LivePriceStore:
 
         # ── Readers ──────────────────────────────────────────────────────────
 
-    def get_oracle_price(self, asset: str) -> Optional[float]:
-        """Returns the freshest oracle price (max 120s old, else None)."""
+    def get_oracle_price(self, asset: str, max_age: float = 300.0) -> Optional[float]:
+        """Returns the freshest oracle price across Chainlink, Binance direct, and Binance RTDS."""
         now = time.time()
-        max_age = 120  # 2 minutes
-
-        # Chainlink (highest priority)
+        candidates = []
         if asset in self.chainlink:
-            age = now - self.chainlink_ts.get(asset, 0)
-            if age <= max_age:
-                return self.chainlink[asset]
-
-        # Binance direct (second priority)
+            candidates.append((self.chainlink_ts.get(asset, 0), self.chainlink[asset], "chainlink"))
         if asset in self.binance_direct:
-            age = now - self.binance_direct_ts.get(asset, 0)
-            if age <= max_age:
-                return self.binance_direct[asset]
-
-        # Binance RTDS (last resort)
+            candidates.append((self.binance_direct_ts.get(asset, 0), self.binance_direct[asset], "binance_direct"))
         if asset in self.binance:
-            age = now - self.binance_ts.get(asset, 0)
-            if age <= max_age:
-                return self.binance[asset]
+            candidates.append((self.binance_ts.get(asset, 0), self.binance[asset], "binance_rtds"))
 
-        # All sources stale — return None instead of old data
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        freshest_ts, price, src = candidates[0]
+        if max_age is None or (now - freshest_ts) <= max_age:
+            return price
         return None
 
     def get_fastest_price(self, asset: str) -> Tuple[Optional[float], str]:
