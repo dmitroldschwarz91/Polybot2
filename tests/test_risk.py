@@ -139,17 +139,29 @@ class TestPortfolioGuards:
 
 
 class TestPositionSizing:
-    def test_base_stake_half_balance(self):
-        rm = RiskManager(make_settings())
-        assert rm.base_stake(100.0) == 50.0
+    def test_base_stake_ratio(self):
+        rm = RiskManager(make_settings(max_stake_ratio=0.20))
+        assert rm.base_stake(100.0) == 20.0
 
     def test_imbalance_boosts_stake(self):
-        rm = RiskManager(make_settings(max_stake_ratio=0.75))
+        rm = RiskManager(make_settings(max_stake_ratio=0.50))
         stake = rm.stake_with_imbalance(100.0, imbalance=0.95)
         base = 50.0
-        assert stake == min(base * 1.3, 100 * 0.75)  # capped at 75
+        assert stake == min(base * 1.3, 100 * 0.50)  # capped at 50
 
     def test_zero_balance_zero_stake(self):
         rm = RiskManager(make_settings())
         assert rm.base_stake(0) == 0.0
         assert rm.vacuum_scalp_stake(0, 0.9) == 0.0
+
+class TestMaxStakeCap:
+    def test_twap_inertia_stake_exact_ratio(self):
+        rm = RiskManager(make_settings(max_stake_ratio=0.20))
+        # 66.6738 * 0.20 = 13.33476 -> 13.33
+        assert rm.twap_inertia_stake(66.6738) == 13.33
+
+    def test_imbalance_cannot_exceed_max_stake_ratio(self):
+        rm = RiskManager(make_settings(max_stake_ratio=0.20, imbalance_enabled=True))
+        stake = rm.stake_with_imbalance(66.6738, imbalance=0.99)
+        assert stake <= 66.6738 * 0.20 + 0.01
+        assert stake == 13.33
