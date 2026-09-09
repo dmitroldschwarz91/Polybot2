@@ -164,42 +164,63 @@ class RiskManager:
     def base_stake(self, balance: float) -> float:
         if not balance or balance <= 0:
             return 0.0
-        return float((Decimal(str(balance)) / 2).quantize(Decimal("0.01"), rounding=ROUND_DOWN))
-
+        return float(
+            (Decimal(str(balance)) * Decimal(str(self.s.max_stake_ratio)))
+            .quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        )
+     
     def stake_with_imbalance(self, balance: float, imbalance: float) -> float:
         base = self.base_stake(balance)
+        max_allowed = float(
+            (Decimal(str(balance)) * Decimal(str(self.s.max_stake_ratio)))
+            .quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        )
         if not self.s.imbalance_enabled or imbalance < self.s.moderate_imbalance_threshold:
-            return base
+            return min(base, max_allowed)
         mult = 1.0
         for th, m in sorted(self.s.imbalance_stake_multipliers.items(), reverse=True):
             if imbalance >= th:
                 mult = m
                 break
-        return min(base * mult, balance * self.s.max_stake_ratio)
+        return min(base * mult, max_allowed)
+
+    def twap_inertia_stake(self, balance: float) -> float:
+        if not balance or balance <= 0:
+            return 0.0
+        return float(
+            (Decimal(str(balance)) * Decimal(str(self.s.max_stake_ratio)))
+            .quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        )
 
     def early_trend_stake(self, balance: float) -> float:
         if not balance or balance <= 0:
             return 0.0
+        ratio = min(self.s.early_trend_max_stake_ratio, self.s.max_stake_ratio)
         return float(
-            Decimal(str(balance * self.s.early_trend_max_stake_ratio))
+            (Decimal(str(balance)) * Decimal(str(ratio)))
             .quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         )
 
     def vacuum_scalp_stake(self, balance: float, imbalance: float) -> float:
         if not balance or balance <= 0:
             return 0.0
+        ratio = min(self.s.vacuum_scalp_max_stake_ratio, self.s.max_stake_ratio)
         base = float(
-            Decimal(str(balance * self.s.vacuum_scalp_max_stake_ratio))
+            (Decimal(str(balance)) * Decimal(str(ratio)))
+            .quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        )
+        max_allowed = float(
+            (Decimal(str(balance)) * Decimal(str(self.s.max_stake_ratio)))
             .quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         )
         if not self.s.imbalance_enabled or imbalance < self.s.moderate_imbalance_threshold:
-            return base
+            return min(base, max_allowed)
         mult = 1.0
         for th, m in sorted(self.s.imbalance_stake_multipliers.items(), reverse=True):
             if imbalance >= th:
                 mult = m
                 break
-        return min(base * mult, balance * self.s.max_stake_ratio)
+        return min(base * mult, max_allowed)
 
     def imbalance_confidence_boost(self, imbalance: float) -> float:
         if not self.s.imbalance_enabled:
