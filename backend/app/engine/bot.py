@@ -31,6 +31,7 @@ from ..marketdata.stores import FillStore, LivePriceStore
 from ..marketdata.websockets import WebSocketManager
 from ..marketdata.book_poller import BookPoller
 from ..risk.manager import RiskManager
+from ..sample_io import append_sample
 from ..strategies import all_strategies
 from ..strategies.base import Opportunity
 from ..strategies.favdip import check_entry as _favdip_check
@@ -98,7 +99,12 @@ class TradingEngine:
         self._zpair_prices: Dict[str, list] = {}
         self._zpair_last_ts: Dict[str, float] = {}
         self._pending_leg1: Dict[str, dict] = {}
-
+        # Live interval samples logging
+        self.samples_log_path = Path(settings.log_dir) / "live_interval_samples.jsonl"
+        self.samples_log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._last_sample_ts: Dict[str, float] = {}
+        self._cur_interval: int = 0
+        
     # ── lifecycle ────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -194,6 +200,7 @@ class TradingEngine:
                     snapshot_done = True
 
                 if last_interval != cur:
+                    self._cur_interval = cur
                     if last_interval != 0:
                         self.balance.state.intervals_passed += 1
                         self.traded, interval_pnl = await self._cleanup(cur)
@@ -220,7 +227,7 @@ class TradingEngine:
                 markets = await asyncio.gather(*[self.market_data.fetch_market(a) for a in self.s.assets], return_exceptions=True)
                 new_tokens = set()
                 for m in markets:
-                    if m:
+                    if m and isinstance(m, dict):
                         for tid in (m.get("up_token_id"), m.get("down_token_id")):
                             if tid and tid not in self.known_tokens:
                                 new_tokens.add(tid)
@@ -228,6 +235,17 @@ class TradingEngine:
                 if new_tokens:
                     await self.ws.subscribe_market_tokens(new_tokens)
                     self.book_poller.watch(new_tokens)
+                
+                # sample interval state for live bot
+                for asset, market in zip(self.s.assets, markets):
+                    effective_market = market if (market and isinstance(market, dict)) else {
+                        "slug": f"{asset.lower()}-updown-{self.s.interval_minutes}m-{self._cur_interval or self.market_data.current_interval_ts()}",
+                        "asset": asset,
+                        "end_ts": (self._cur_interval or self.market_data.current_interval_ts()) + self.s.interval_minutes * 60,
+                        "target_price": self.market_data.start_prices.get(str(self._cur_interval or self.market_data.current_interval_ts()), {}).get(asset),
+                    }
+                    stc = effective_market["end_ts"] - time.time()
+                    self._sample_interval(effective_market, asset, stc)
 
                 # evaluate strategies per asset
                 for asset, market in zip(self.s.assets, markets):
@@ -390,14 +408,25 @@ class TradingEngine:
         buy_price = round_to_tick(opp.entry_price, tick_size)
 
         # sizing
+        avail = await run_sync(self.client.get_real_balance)
+        effective = min(self.status.bot_balance, avail) if (avail is not None and not self.client.paper) else self.status.bot_balance
+
         if strat.entry_type == EntryType.EARLY_TREND:
-            stake = self.risk.early_trend_stake(self.status.bot_balance)
+            stake = self.risk.early_trend_stake(effective)
         elif strat.entry_type == EntryType.VACUUM_SCALP:
-            stake = self.risk.vacuum_scalp_stake(self.status.bot_balance, imb)
+            stake = self.risk.vacuum_scalp_stake(effective, imb)
+        elif strat.entry_type == EntryType.TWAP_INERTIA:
+            stake = self.risk.twap_inertia_stake(effective)
         else:
-            avail = await run_sync(self.client.get_real_balance)
-            effective = min(self.status.bot_balance, avail) if (avail is not None and not self.client.paper) else self.status.bot_balance
             stake = self.risk.stake_with_imbalance(effective, imb)
+        
+        # Enforce hard upper cap based on max_stake_ratio
+        max_allowed_stake = float(
+            (Decimal(str(effective)) * Decimal(str(self.s.max_stake_ratio)))
+            .quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        )
+        stake = min(stake, max_allowed_stake)
+        
         if stake <= 0:
             return
         size = round_size(stake / buy_price)
@@ -411,7 +440,8 @@ class TradingEngine:
             return
 
         self.log.info(f"[{asset}] ENTRY {direction} [{strat.entry_type.value}]",
-                      price=buy_price, lots=size, dev=f"{(opp.deviation or 0)*100:+.3f}%")
+                      price=buy_price, lots=size, cost=f"${cost:.2f}",
+                      stake_budget=f"${stake:.2f}", dev=f"{(opp.deviation or 0)*100:+.3f}%")
 
         result = await self.executor.execute_buy(token_id, buy_price, size, asset,
                                                  max_budget=cost * 1.05)
@@ -496,6 +526,101 @@ class TradingEngine:
 
     # ── helpers ──────────────────────────────────────────────────────────
 
+    def _sample_interval(self, market: dict, asset: str, stc: float) -> None:
+        """Append a second-by-second market-state sample for the WHOLE interval (live bot)."""
+        key = f"{asset}_{market.get('slug', '')}"
+        last = self._last_sample_ts.get(key, 0)
+        throttle = getattr(self.s, "demo_sample_interval_secs_active", 1.0) if stc <= 60.0 else getattr(self.s, "demo_sample_interval_secs_idle", 5.0)
+        if time.time() - last < throttle:
+            return
+        self._last_sample_ts[key] = time.time()
+
+        op = self.prices.get_oracle_price(asset)
+        cur_int = self._cur_interval or self.market_data.current_interval_ts()
+        start_p = market.get("target_price") or self.market_data.start_prices.get(str(cur_int), {}).get(asset)
+        _now = time.time()
+        _ages = []
+        for _src in (self.prices.chainlink_ts.get(asset),
+                     self.prices.binance_direct_ts.get(asset),
+                     self.prices.binance_ts.get(asset)):
+            if _src:
+                _ages.append(round(_now - _src, 1))
+        oracle_age = min(_ages) if _ages else None
+        range5 = self.prices.get_range_ratio(asset, 300.0)
+        vwap = self.prices.get_vwap(asset)
+        twap = self.prices.get_chainlink_twap(asset)
+        _twap_ts = self.prices.chainlink_twap_ts.get(asset)
+        twap_age = round(_now - _twap_ts, 1) if _twap_ts else None
+        twap_open = (self.prices.get_twap_at(asset, float(cur_int))
+                     if self.s.chainlink_twap_enabled else None)
+        if twap_open is None:
+            twap_open = start_p
+
+        leader = (market["up_token_id"] if (op and start_p and op >= start_p)
+                  else market.get("down_token_id")) if (op and start_p) else None
+        tok, bid_vol, ask_vol, alive = None, 0, 0, False
+        if leader:
+            book = self.prices.get_book(leader)
+            if book:
+                tok, bid_vol, ask_vol = book.best_ask, book.bid_volume, book.ask_volume
+                alive = (bid_vol > 0 or ask_vol > 0)
+
+        up_bid = up_ask = dn_bid = dn_ask = None
+        up_av = dn_av = 0.0
+        up_asize = dn_asize = None
+        utid = market.get("up_token_id"); dtid = market.get("down_token_id")
+        bu = self.prices.get_book(utid) if utid else None
+        if bu:
+            up_ask = bu.best_ask
+            up_bid = getattr(bu, "best_bid", None)
+            up_av = getattr(bu, "ask_volume", 0.0) or 0.0
+            up_asize = getattr(bu, "best_ask_size", None)
+        bd = self.prices.get_book(dtid) if dtid else None
+        if bd:
+            dn_ask = bd.best_ask
+            dn_bid = getattr(bd, "best_bid", None)
+            dn_av = getattr(bd, "ask_volume", 0.0) or 0.0
+            dn_asize = getattr(bd, "best_ask_size", None)
+        pair_ask_sum = round(up_ask + dn_ask, 4) if (up_ask is not None and dn_ask is not None) else None
+
+        def _bq(book):
+            if book is None:
+                return "none"
+            if book.ts and _now - book.ts > self.s.ws_book_stale_secs:
+                return "stale"
+            ha, hb = book.ask_volume > 0, book.bid_volume > 0
+            return "full" if (ha and hb) else ("asks_only" if ha else ("bids_only" if hb else "empty"))
+        up_bq, dn_bq = _bq(bu), _bq(bd)
+        up_ask_at = self.prices.ask_size_at(utid, up_ask) if (utid and up_ask is not None) else None
+        dn_ask_at = self.prices.ask_size_at(dtid, dn_ask) if (dtid and dn_ask is not None) else None
+
+        rec = {
+            "ts": int(_now),
+            "asset": asset,
+            "slug": market.get("slug", ""),
+            "secs_to_close": int(stc),
+            "oracle_price": op,
+            "oracle_age": oracle_age,
+            "deviation_pct": round((op - start_p) / start_p * 100, 3) if (op and start_p and start_p > 0) else None,
+            "range5": round(range5, 5) if range5 is not None else None,
+            "vwap": round(vwap, 2) if vwap is not None else None,
+            "twap": round(twap, 2) if twap is not None else None,
+            "twap_age": twap_age,
+            "twap_open": round(twap_open, 2) if twap_open is not None else None,
+            "deviation_twap_pct": round((twap - twap_open) / twap_open * 100, 3) if (twap and twap_open and twap_open > 0) else None,
+            "leader_token_price": tok,
+            "bid_volume": bid_vol,
+            "ask_volume": ask_vol,
+            "book_alive": alive,
+            "imbalance": round(bid_vol / (bid_vol + ask_vol), 3) if (bid_vol + ask_vol) > 0 else 0.5,
+            "pair_ask_sum": pair_ask_sum,
+            "up_ask": up_ask, "up_bid": up_bid, "up_ask_vol": up_av,
+            "up_ask_size": up_asize, "up_ask_size_at": up_ask_at, "up_bq": up_bq,
+            "dn_ask": dn_ask, "dn_bid": dn_bid, "dn_ask_vol": dn_av,
+            "dn_ask_size": dn_asize, "dn_ask_size_at": dn_ask_at, "dn_bq": dn_bq,
+        }
+        append_sample(self.samples_log_path, rec)
+        
     async def _resolve_start_prices(self, cur: int, secs_from_start: float) -> None:
         for asset in self.s.assets:
             key = str(cur)
@@ -509,14 +634,20 @@ class TradingEngine:
 
     async def _wait_for_feeds(self) -> None:
         self.log.info("Waiting for WebSocket data...")
+        try:
+            await self.market_data.seed_prices()
+        except Exception as e:
+            self.log.debug(f"REST seed failed: {e}")
         for _ in range(50):
-            if self.prices.chainlink or self.prices.binance:
+            if self.prices.chainlink or self.prices.binance or self.prices.binance_direct:
                 break
             await asyncio.sleep(0.1)
         if self.prices.chainlink:
             self.log.info("Chainlink OK", assets=list(self.prices.chainlink.keys()))
+        if self.prices.binance_direct:
+            self.log.info("Binance Direct OK", assets=list(self.prices.binance_direct.keys()))
         if self.prices.binance:
-            self.log.info("Binance OK", assets=list(self.prices.binance.keys()))
+            self.log.info("Binance RTDS OK", assets=list(self.prices.binance.keys()))
 
     async def _cleanup(self, cur_ts: int) -> Tuple[Set[str], float]:
         """Clean up expired positions with REAL winner check. Returns (traded_set, interval_pnl)."""
