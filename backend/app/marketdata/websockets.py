@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -29,6 +30,13 @@ import websockets
 from ..config import Settings
 from ..core.logging import StructuredLogger
 from .stores import FillStore, LivePriceStore
+
+
+def _backoff_delay(attempt: int, base: float = 2.0, max_delay: float = 30.0) -> float:
+    """Exponential backoff with randomized jitter to prevent thundering herds and Cloudflare bans."""
+    factor = min(30.0, base * (1.5 ** min(attempt, 8)))
+    jitter = random.uniform(0.1, 1.0)
+    return min(max_delay, factor + jitter)
 
 
 # How long to keep a token in the subscription buffer after it was added.
@@ -132,7 +140,7 @@ class WebSocketManager:
     # ── Binance direct ───────────────────────────────────────────────────
 
     async def _run_binance_direct(self) -> None:
-        # Stream all known crypto symbols to ensure live feeds for all active/demo assets
+         # Stream all known crypto symbols to ensure live feeds for all active/demo assets
         streams = [f"{sym}@aggTrade" for sym in self.s.binance_symbols_ws.values()]
         url = (f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
                if len(streams) > 1 else f"wss://stream.binance.com:9443/ws/{streams[0]}")
@@ -140,12 +148,14 @@ class WebSocketManager:
                       if len(streams) > 1 else f"wss://data-stream.binance.vision/ws/{streams[0]}")
         urls = [url, backup_url]
         url_idx = 0
+        attempt = 0
          
         while True:
             target_url = urls[url_idx % len(urls)]
             try:
                 async with websockets.connect(target_url, ping_interval=20, ping_timeout=10) as ws:
                     self.log.info(f"[WS-BINANCE-DIRECT] Connected ({len(streams)} streams)")
+                    attempt = 0
                     async for raw in ws:
                         try:
                             msg = json.loads(raw)
@@ -160,13 +170,17 @@ class WebSocketManager:
                         except Exception:
                             continue
             except (websockets.exceptions.ConnectionClosed, ConnectionError, OSError) as e:
-                self.log.warning(f"[WS-BINANCE-DIRECT] Reconnecting: {e}")
+                attempt += 1
+                delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
+                self.log.warning(f"[WS-BINANCE-DIRECT] Reconnecting in {delay:.1f}s: {e}")
                 url_idx += 1
-                await asyncio.sleep(2)
+                await asyncio.sleep(delay)
             except Exception as e:
-                self.log.warning("[WS-BINANCE-DIRECT] Error", error=str(e))
+                attempt += 1
+                delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
+                self.log.warning(f"[WS-BINANCE-DIRECT] Error ({e}), retrying in {delay:.1f}s")
                 url_idx += 1
-                await asyncio.sleep(2)
+                await asyncio.sleep(delay)
 
     # ── Polymarket RTDS (Chainlink + Binance) ────────────────────────────
 
@@ -182,14 +196,31 @@ class WebSocketManager:
             subs.append({"topic": "crypto_prices_twap_sixty", "type": "*", "filters": ""})
             subs.append({"topic": "crypto_prices_twap", "type": "*", "filters": ""})
         sub = json.dumps({"action": "subscribe", "subscriptions": subs})
+        attempt = 0
+     
         while True:
+            heartbeat_task = None
             try:
                 async with websockets.connect(
                     self.s.ws_rtds_url, ping_interval=20, ping_timeout=20
                 ) as ws:
                     await ws.send(sub)
-                    self.log.info("[WS-RTDS] Connected")                    
+                    self.log.info("[WS-RTDS] Connected")
+                    attempt = 0
                     last_msg = time.time()
+
+                    # Start active background PING sender for Polymarket RTDS
+                    async def _rtds_pinger():
+                        while _ws_is_open(ws):
+                            try:
+                                await asyncio.sleep(float(self.s.ws_heartbeat_interval))
+                                if _ws_is_open(ws):
+                                    await ws.send("PING")
+                            except (asyncio.CancelledError, Exception):
+                                break
+
+                    heartbeat_task = asyncio.create_task(_rtds_pinger())
+
                     while True:
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -212,11 +243,18 @@ class WebSocketManager:
                             continue
                         await self._handle_rtds(raw)
             except (websockets.exceptions.ConnectionClosed, ConnectionError, OSError) as e:
-                self.log.warning("[WS-RTDS] Reconnecting", error=repr(e))
-                await asyncio.sleep(self.s.ws_reconnect_delay)
+                attempt += 1
+                delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
+                self.log.warning(f"[WS-RTDS] Reconnecting in {delay:.1f}s", error=repr(e))
+                await asyncio.sleep(delay)
             except Exception as e:
-                self.log.error("[WS-RTDS] Fatal", error=repr(e))
-                await asyncio.sleep(self.s.ws_reconnect_delay)
+                attempt += 1
+                delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
+                self.log.error(f"[WS-RTDS] Fatal ({e}), reconnecting in {delay:.1f}s")
+                await asyncio.sleep(delay)
+            finally:
+                if heartbeat_task and not heartbeat_task.done():
+                    heartbeat_task.cancel()
 
     async def _handle_rtds(self, raw: str) -> None:
         try:
@@ -275,6 +313,7 @@ class WebSocketManager:
     # ── Polymarket market channel ────────────────────────────────────────
 
     async def _run_market(self) -> None:
+        attempt = 0
         while True:
             try:
                 async with websockets.connect(
@@ -282,6 +321,7 @@ class WebSocketManager:
                 ) as ws:
                     self._market_ws = ws
                     self.log.info("[WS-MARKET] Connected")
+                    attempt = 0
                     # Re-subscribe to ACTIVE (non-expired) tokens after reconnect
                     active = self._get_active_tokens()
                     if active:
@@ -318,12 +358,16 @@ class WebSocketManager:
                             continue
             except (websockets.exceptions.ConnectionClosed, ConnectionError, OSError):
                 self._market_ws = None
-                self.log.warning("[WS-MARKET] Reconnecting")
-                await asyncio.sleep(self.s.ws_reconnect_delay)
+                attempt += 1
+                delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
+                self.log.warning(f"[WS-MARKET] Reconnecting in {delay:.1f}s")
+                await asyncio.sleep(delay)
             except Exception as e:
                 self._market_ws = None
-                self.log.error("[WS-MARKET] Error", error=str(e))
-                await asyncio.sleep(self.s.ws_reconnect_delay)
+                attempt += 1
+                delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
+                self.log.error(f"[WS-MARKET] Error ({e}), reconnecting in {delay:.1f}s")
+                await asyncio.sleep(delay)
 
     def _process_market_msg(self, msg: dict) -> None:
         et = msg.get("event_type", "")
@@ -361,15 +405,20 @@ class WebSocketManager:
             pass
 
     async def _send_subscription(self, ws, token_ids: Set[str]) -> bool:
-        """Low-level send. Returns True on success, False on failure."""
+        """Low-level send. Batches in chunks of up to 50 tokens to prevent payload drops."""
         if not token_ids:
             return True
+        token_list = list(token_ids)
+        chunk_size = 50
+        all_ok = True
         try:
-            payload = json.dumps({
-                "assets_ids": list(token_ids), "type": "market",
-                "custom_feature_enabled": True,
-            })
-            await ws.send(payload)
+            for i in range(0, len(token_list), chunk_size):
+                chunk = token_list[i:i + chunk_size]
+                payload = json.dumps({
+                    "assets_ids": chunk, "type": "market",
+                    "custom_feature_enabled": True,
+                })
+                await ws.send(payload)
             return True
         except Exception:
             return False
@@ -419,6 +468,7 @@ class WebSocketManager:
     # ── Polymarket user channel ──────────────────────────────────────────
 
     async def _run_user(self) -> None:
+        attempt = 0
         while True:
             if not self.api_creds:
                 await asyncio.sleep(1.0)
@@ -429,6 +479,7 @@ class WebSocketManager:
                 ) as ws:
                     await ws.send(json.dumps({"type": "user", "auth": self.api_creds}))
                     self.log.info("[WS-USER] Connected")
+                    attempt = 0
                     async for raw in ws:
                         if raw == "PONG":
                             continue
@@ -443,11 +494,15 @@ class WebSocketManager:
                         except Exception:
                             continue
             except (websockets.exceptions.ConnectionClosed, ConnectionError, OSError):
-                self.log.warning("[WS-USER] Reconnecting")
-                await asyncio.sleep(self.s.ws_reconnect_delay)
+                attempt += 1
+                delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
+                self.log.warning(f"[WS-USER] Reconnecting in {delay:.1f}s")
+                await asyncio.sleep(delay)
             except Exception as e:
-                self.log.error("[WS-USER] Error", error=str(e))
-                await asyncio.sleep(self.s.ws_reconnect_delay)
+                attempt += 1
+                delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
+                self.log.error(f"[WS-USER] Error ({e}), reconnecting in {delay:.1f}s")
+                await asyncio.sleep(delay)
 
     def _process_user_msg(self, msg: dict) -> None:
         event_type = (msg.get("event_type") or "").lower()
