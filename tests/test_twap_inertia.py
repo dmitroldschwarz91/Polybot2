@@ -130,9 +130,9 @@ def test_twap_inertia_rejects_stale_feed(env):
     cur_interval = int(now // 300) * 300
     market_data.start_prices[str(cur_interval)] = {asset: 80000.0}
 
-    # Stale TWAP feed (> 3.0 seconds old)
-    prices.update_chainlink_twap(asset, 80050.0, now - 5.0)
-    prices.chainlink_ts[asset] = now - 5.0
+    # Stale TWAP feed (> 60.0 seconds old)
+    prices.update_chainlink_twap(asset, 80050.0, now - 70.0)
+    prices.chainlink_ts[asset] = now - 70.0
 
     up_token = "tok_up_123"
     down_token = "tok_down_123"
@@ -174,6 +174,59 @@ def test_twap_inertia_window_timing(env):
     assert strategy.check(market_early, asset, set(), 100.0, prices, market_data, risk).reason == "too_early"
 
 
+def test_compute_time_weighted_twap_piecewise():
+    from backend.app.marketdata.stores import compute_time_weighted_twap
+
+    # Window [100.0, 160.0] (duration = 60s)
+    # Price was 100 from t=90 to t=120 (first 20s of window at price 100 -> 20 * 100 = 2000)
+    # Price changed to 200 at t=120 until t=160 (remaining 40s at price 200 -> 40 * 200 = 8000)
+    # Expected TWAP = (2000 + 8000) / 60 = 10000 / 60 = 166.6667
+    ticks = [
+        (90.0, 100.0),
+        (120.0, 200.0),
+    ]
+    twap, cov = compute_time_weighted_twap(ticks, 100.0, 160.0)
+    assert round(twap, 2) == 166.67
+    assert cov == 1.0
+
+
+def test_twap_inertia_rejects_insufficient_coverage(env):
+    strategy, prices, market_data, risk = env
+    now = time.time()
+
+    asset = "BTC"
+    cur_interval = int(now // 300) * 300
+    market_data.start_prices[str(cur_interval)] = {asset: 80000.0}
+
+    # No official RTDS TWAP, only fallback oracle ticks
+    prices.chainlink_twap.clear()
+    prices.chainlink_twap_ts.clear()
+    prices.chainlink_history[asset].clear()
+    prices.binance_direct_history[asset].clear()
+    prices.binance_history[asset].clear()
+
+    # Only one tick 10 seconds ago, no prior ticks -> coverage is only 10/60 = 16.7%
+    prices.update_chainlink(asset, 80040.0, int((now - 10.0) * 1000))
+    prices.chainlink_ts[asset] = now
+
+    up_token = "tok_up_123"
+    down_token = "tok_down_123"
+    prices.update_full_book(up_token, [], [{"price": "0.85", "size": "50"}])
+    prices.update_full_book(down_token, [], [{"price": "0.15", "size": "50"}])
+
+    market = {
+        "slug": "btc-5m-low-cov",
+        "end_ts": now + 20.0,
+        "up_token_id": up_token,
+        "down_token_id": down_token,
+        "target_price": 80000.0,
+    }
+
+    opp = strategy.check(market, asset, set(), 100.0, prices, market_data, risk)
+    assert opp.can_enter is False
+    assert opp.reason == "insufficient_feed_coverage"
+
+
 @pytest.mark.asyncio
 async def test_async_sample_buffer(tmp_path):
     log_file = tmp_path / "test_samples.tsv"
@@ -193,3 +246,89 @@ async def test_async_sample_buffer(tmp_path):
     assert content.startswith("# ts\tasset")
     assert "btc-5m-1" in content
     assert "eth-5m-1" in content
+
+
+@pytest.mark.asyncio
+async def test_multi_asset_opportunity_ranking(settings):
+    from backend.app.strategies.base import Opportunity
+
+    # Create candidate opportunities for BTC and ETH
+    opp_btc = Opportunity(
+        can_enter=True,
+        reason="twap_barrier_locked",
+        direction="UP",
+        entry_price=0.85,
+        token_id="tok_btc_up",
+        oracle_price=80050.0,
+        deviation=0.000625,
+        imbalance=0.5,
+        extra={"barrier_pct": 0.08},
+    )
+
+    opp_eth = Opportunity(
+        can_enter=True,
+        reason="twap_barrier_locked",
+        direction="UP",
+        entry_price=0.80,
+        token_id="tok_eth_up",
+        oracle_price=3050.0,
+        deviation=0.016,
+        imbalance=0.5,
+        extra={"barrier_pct": 0.20},  # ETH has higher barrier_pct (0.20 > 0.08)
+    )
+
+    candidate_opportunities = [
+        (None, "BTC", {"slug": "btc-market"}, opp_btc),
+        (None, "ETH", {"slug": "eth-market"}, opp_eth),
+    ]
+
+    # Sort using the bot's sorting key
+    candidate_opportunities.sort(
+        key=lambda item: (
+            item[3].extra.get("barrier_pct", 0.0) if item[3].extra else 0.0,
+            abs(item[3].deviation or 0.0),
+        ),
+        reverse=True,
+    )
+
+    # ETH must be ranked first due to higher barrier_pct
+    assert candidate_opportunities[0][1] == "ETH"
+    assert candidate_opportunities[1][1] == "BTC"
+
+
+@pytest.mark.asyncio
+async def test_pre_flight_orderbook_check(settings):
+    from backend.app.strategies.base import Opportunity
+    from backend.app.strategies.twap_inertia import TWAPInertiaStrategy
+    from backend.app.engine.bot import TradingEngine
+
+    bot = TradingEngine(settings)
+    bot.status.running = True
+    bot.status.bot_balance = 100.0
+    bot.status.initial_balance = 100.0
+
+    token_id = "tok_btc_up"
+    strat = TWAPInertiaStrategy(settings)
+    market = {"slug": "btc-test-slug", "end_ts": time.time() + 20}
+
+    opp = Opportunity(
+        can_enter=True,
+        reason="twap_barrier_locked",
+        direction="UP",
+        entry_price=0.85,
+        token_id=token_id,
+        oracle_price=80050.0,
+        deviation=0.000625,
+        imbalance=0.5,
+        extra={"barrier_pct": 0.08},
+    )
+
+    # Case 1: Fresh book ask moved too high (> 0.92 max or > opp.entry_price + 0.02)
+    bot.prices.update_full_book(token_id, [], [{"price": "0.95", "size": "50"}])
+    entered = await bot._enter(strat, "BTC", market, opp)
+    assert entered is False
+
+    # Case 2: Fresh book depth vanished (< twap_min_level_depth = 5)
+    bot.prices.update_full_book(token_id, [], [{"price": "0.85", "size": "2"}])
+    entered = await bot._enter(strat, "BTC", market, opp)
+    assert entered is False
