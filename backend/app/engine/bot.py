@@ -12,6 +12,7 @@ import json
 import time
 from collections import deque
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -248,6 +249,7 @@ class TradingEngine:
                     self._sample_interval(effective_market, asset, stc)
 
                 # evaluate strategies per asset
+                opportunities = []
                 for asset, market in zip(self.s.assets, markets):
                     if self.status.bot_balance <= 0 or not market:
                         continue
@@ -269,8 +271,60 @@ class TradingEngine:
 
                     if market["slug"] in self.traded:
                         continue
-                    if await self._evaluate_strategies(asset, market):
-                        break  # one entry per loop tick
+
+                    # Gather candidate opportunities across assets
+                    for strat in self.strategies:
+                        if not strat.enabled():
+                            continue
+                        stc = market["end_ts"] - time.time()
+                        # window pre-checks to skip cheap
+                        if strat.entry_type == EntryType.EARLY_TREND and stc <= self.s.early_trend_cutoff_secs:
+                            continue
+                        if strat.entry_type == EntryType.STANDARD and not (0 < stc <= self.s.entry_window_secs):
+                            continue
+                        if strat.entry_type == EntryType.VACUUM_SCALP and stc <= self.s.vacuum_scalp_entry_end_secs:
+                            continue
+                        if strat.entry_type == EntryType.TWAP_INERTIA and not (self.s.twap_stc_min <= stc <= self.s.twap_stc_max):
+                            continue
+
+                        opp = strat.check(market, asset, self.traded, self.status.bot_balance,
+                                          self.prices, self.market_data, self.risk,
+                                          price_history=self.price_history)
+                        if not opp.can_enter:
+                            if strat.entry_type == EntryType.TWAP_INERTIA and (self.s.twap_stc_min <= stc <= self.s.twap_stc_max):
+                                if not hasattr(self, "_last_strat_diag_ts"):
+                                    self._last_strat_diag_ts = {}
+                                last_d = self._last_strat_diag_ts.get(asset, 0.0)
+                                if time.time() - last_d >= 10.0:
+                                    self._last_strat_diag_ts[asset] = time.time()
+                                    self.log.info(f"[{asset}] TWAP Check (stc={stc:.0f}s): {opp.reason}",
+                                                  extra=opp.extra if hasattr(opp, "extra") else None)
+                            continue
+
+                        opportunities.append((strat, asset, market, opp))
+                        break
+
+                # Multi-Asset Ranking & Priority Execution
+                if opportunities:
+                    # Sort by barrier factor or deviation magnitude descending
+                    opportunities.sort(
+                        key=lambda x: (
+                            x[3].extra.get("barrier_pct", 0.0) if hasattr(x[3], "extra") and x[3].extra else 0.0,
+                            abs(x[3].deviation or 0.0)
+                        ),
+                        reverse=True
+                    )
+                    for strat, asset, market, opp in opportunities:
+                        if market["slug"] in self.traded:
+                            continue
+                        # ★ portfolio-level risk gate
+                        ok, reason = self.risk.can_open_new(self.positions, self.status.bot_balance)
+                        if not ok:
+                            self.log.warning(f"[{asset}] Entry blocked by portfolio risk: {reason}")
+                            break
+                        entered = await self._enter(strat, asset, market, opp)
+                        if entered:
+                            break  # Execute strongest opportunity this loop tick
 
                 if self.s.quiet_mode and (t0 - last_blog) >= self.s.balance_log_interval:
                     cl_age = self.prices.get_chainlink_age("BTC")
@@ -387,6 +441,14 @@ class TradingEngine:
                               self.prices, self.market_data, self.risk,
                               price_history=self.price_history)
             if not opp.can_enter:
+                if strat.entry_type == EntryType.TWAP_INERTIA and (self.s.twap_stc_min <= stc <= self.s.twap_stc_max):
+                    if not hasattr(self, "_last_strat_diag_ts"):
+                        self._last_strat_diag_ts = {}
+                    last_d = self._last_strat_diag_ts.get(asset, 0.0)
+                    if time.time() - last_d >= 10.0:
+                        self._last_strat_diag_ts[asset] = time.time()
+                        self.log.info(f"[{asset}] TWAP Check (stc={stc:.0f}s): {opp.reason}",
+                                      extra=opp.extra if hasattr(opp, "extra") else None)
                 continue
 
             # ★ portfolio-level risk gate (NEW)
@@ -399,7 +461,7 @@ class TradingEngine:
             return True
         return False
 
-    async def _enter(self, strat, asset: str, market: dict, opp: Opportunity) -> None:
+    async def _enter(self, strat, asset: str, market: dict, opp: Opportunity) -> bool:
         token_id = opp.token_id
         direction = opp.direction
         imb = opp.imbalance
@@ -407,6 +469,19 @@ class TradingEngine:
         from ..execution.orders import round_to_tick
         buy_price = round_to_tick(opp.entry_price, tick_size)
 
+        # Pre-Flight Orderbook Re-verification (Casatrick latency & slippage guard)
+        fresh_book = self.prices.get_book(token_id)
+        if fresh_book is not None and fresh_book.best_ask is not None:
+            max_allowed = getattr(self.s, "twap_max_token_ask", 0.92) if strat.entry_type == EntryType.TWAP_INERTIA else 0.99
+            if fresh_book.best_ask > max_allowed or fresh_book.best_ask > opp.entry_price + 0.02:
+                self.log.warning(f"[{asset}] Pre-flight abort: best_ask moved from ${opp.entry_price:.3f} to ${fresh_book.best_ask:.3f}")
+                return False
+            # Check if book depth at best_ask level vanished
+            ask_at_size = self.prices.ask_size_at(token_id, fresh_book.best_ask)
+            if ask_at_size is not None and ask_at_size < getattr(self.s, "twap_min_level_depth", 5):
+                self.log.warning(f"[{asset}] Pre-flight abort: best_ask depth too shallow ({ask_at_size} shares)")
+                return False
+                
         # sizing
         avail = await run_sync(self.client.get_real_balance)
         effective = min(self.status.bot_balance, avail) if (avail is not None and not self.client.paper) else self.status.bot_balance
@@ -428,16 +503,16 @@ class TradingEngine:
         stake = min(stake, max_allowed_stake)
         
         if stake <= 0:
-            return
+            return False
         size = round_size(stake / buy_price)
         if size < self.s.min_order_size:
-            return
+            return False
         cost = round(size * buy_price, 4)
         while cost > stake and size >= self.s.min_order_size:
             size -= 1
             cost = round(size * buy_price, 4)
         if size < self.s.min_order_size or cost < self.s.min_order_value:
-            return
+            return False
 
         self.log.info(f"[{asset}] ENTRY {direction} [{strat.entry_type.value}]",
                       price=buy_price, lots=size, cost=f"${cost:.2f}",
@@ -446,7 +521,7 @@ class TradingEngine:
         result = await self.executor.execute_buy(token_id, buy_price, size, asset,
                                                  max_budget=cost * 1.05)
         if not result.get("success"):
-            return
+            return False
 
         ap, asize, acost = result["price"], result["size"], result["cost"]
         self.status.bot_balance = max(0.0, self.status.bot_balance - acost)
@@ -460,7 +535,7 @@ class TradingEngine:
             pos.sl_in_progress = True
             self.positions[market["slug"]] = pos
             asyncio.create_task(self._nuclear_exit(pos))
-            return
+            return True
 
         pos = strat.build_position(market["slug"], asset, opp, result, market["end_ts"])
         pos.fee_paid = polymarket_dynamic_taker_fee(asize, ap)
@@ -484,6 +559,7 @@ class TradingEngine:
         self.positions[market["slug"]] = pos
         self.log.info(f"[{asset}] FILLED at ${ap:.4f}", cost=f"${acost:.2f}", size=asize,
                       tp=f"${pos.take_profit_price:.4f}", sl=f"${pos.stop_loss_price:.4f}")
+        return True
 
     async def _place_vacuum_tp(self, pos: Position, size: int, tick_size: str) -> dict:
         for attempt in range(3):
