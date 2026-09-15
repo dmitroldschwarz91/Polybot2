@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     twap_stc_min: float = 10.0            # no entries after 10s to close
     twap_stc_max: float = 35.0            # window for accumulated TWAP mass (10-35s)
     twap_max_feed_age: float = 3.0        # max age for TWAP/oracle feeds (outage watchdog)
+    twap_min_coverage_pct: float = 0.70   # min coverage percentage of oracle ticks in 60s window
     twap_min_level_depth: int = 5         # min shares available at best_ask level
 
     # ── Spread capture / hedge-lite ───────────────────────────────────────
