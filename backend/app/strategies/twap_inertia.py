@@ -53,7 +53,7 @@ class TWAPInertiaStrategy(BaseStrategy):
         if stc > max_stc:
             return Opportunity(can_enter=False, reason="too_early")
 
-        # 1. Feed freshness guard (Outage / Maintenance watchdog)
+        # 1. Feed freshness and coverage guard (Outage / Maintenance watchdog)
         now = time.time()
         max_age = getattr(s, "twap_max_feed_age", 3.0)
 
@@ -65,11 +65,24 @@ class TWAPInertiaStrategy(BaseStrategy):
         )
 
         effective_feed_ts = max(twap_ts, oracle_ts)
-        if (now - effective_feed_ts) > max_age:
+        if effective_feed_ts > 0 and (now - effective_feed_ts) > max_age:
             return Opportunity(can_enter=False, reason="stale_twap_or_oracle_feed")
+
+        # Stream coverage & data-completeness guard (applies when fallback reconstruction is needed)
+        is_official_twap_fresh = (twap_ts > 0 and (now - twap_ts) <= max_age)
+        if not is_official_twap_fresh:
+            if hasattr(prices, "get_reconstructed_twap"):
+                _, coverage = prices.get_reconstructed_twap(asset, window_secs=60.0, end_time=now)
+                min_cov = getattr(s, "twap_min_coverage_pct", 0.70)
+                if coverage < min_cov:
+                    return Opportunity(can_enter=False, reason="insufficient_feed_coverage",
+                                       extra={"coverage": round(coverage, 3), "min_coverage": min_cov})
 
         # 2. Reference prices (Current TWAP and Interval TWAP Open)
         cur_twap = prices.get_chainlink_twap(asset, max_age=max_age)
+        if cur_twap is None:
+            cur_twap = prices.get_oracle_price(asset, max_age=max_age)
+
         cur_interval = market_data.current_interval_ts()
         twap_open = (
             prices.get_twap_at(asset, float(cur_interval))
@@ -85,7 +98,8 @@ class TWAPInertiaStrategy(BaseStrategy):
 
         min_dev = getattr(s, "twap_min_dev_pct", 0.015)
         if abs_dev < min_dev:
-            return Opportunity(can_enter=False, reason="deviation_too_small")
+            return Opportunity(can_enter=False, reason="deviation_too_small",
+                               extra={"dev_twap_pct": dev_twap_pct, "min_dev": min_dev})
 
         # 3. TWAP Mathematical Barrier Calculation
         # Window is 60s for 5m crypto markets
@@ -97,7 +111,8 @@ class TWAPInertiaStrategy(BaseStrategy):
         min_barrier = getattr(s, "twap_min_barrier_pct", 0.070)
 
         if barrier_factor < min_barrier:
-            return Opportunity(can_enter=False, reason="insufficient_twap_barrier")
+            return Opportunity(can_enter=False, reason="insufficient_twap_barrier",
+                               extra={"barrier": barrier_factor, "min_barrier": min_barrier, "dev_twap_pct": dev_twap_pct})
 
         direction = "UP" if dev_twap_pct > 0 else "DOWN"
         token_id = market.get("up_token_id") if direction == "UP" else market.get("down_token_id")
@@ -106,14 +121,14 @@ class TWAPInertiaStrategy(BaseStrategy):
         if not token_id:
             return Opportunity(can_enter=False, reason="no_token_id")
 
-        book = prices.get_book_with_max_age(token_id, max_age=5.0)
-        opp_book = prices.get_book_with_max_age(opp_token_id, max_age=5.0) if opp_token_id else None
+        book = prices.get_book_with_max_age(token_id, max_age=15.0) or prices.get_book(token_id)
+        opp_book = prices.get_book_with_max_age(opp_token_id, max_age=15.0) if opp_token_id else None
 
-        if not book or book.best_ask is None:
+        token_ask = book.best_ask if (book and book.best_ask is not None) else prices.get_lot_price(token_id)
+        opp_ask = opp_book.best_ask if (opp_book and opp_book.best_ask is not None) else (prices.get_lot_price(opp_token_id) if opp_token_id else None)
+
+        if token_ask is None or token_ask <= 0:
             return Opportunity(can_enter=False, reason="no_orderbook")
-
-        token_ask = book.best_ask
-        opp_ask = opp_book.best_ask if opp_book else None
 
         # 4. Real-time Frozen Market Filter (0.50 / 0.51 freeze guard)
         if opp_ask is not None:
@@ -124,9 +139,11 @@ class TWAPInertiaStrategy(BaseStrategy):
         max_ask = getattr(s, "twap_max_token_ask", 0.92)
 
         if token_ask < min_ask:
-            return Opportunity(can_enter=False, reason="token_price_too_low")
+            return Opportunity(can_enter=False, reason="token_price_too_low",
+                               extra={"token_ask": token_ask, "min_ask": min_ask})
         if token_ask > max_ask:
-            return Opportunity(can_enter=False, reason="token_price_too_high")
+            return Opportunity(can_enter=False, reason="token_price_too_high",
+                               extra={"token_ask": token_ask, "max_ask": max_ask})
 
         # 5. Liquidity & Depth at best_ask check
         min_depth = getattr(s, "twap_min_level_depth", 5)
@@ -146,10 +163,10 @@ class TWAPInertiaStrategy(BaseStrategy):
         if depth_size is not None and depth_size >= min_depth:
             shares = min(shares, int(depth_size))
 
-        min_order = getattr(s, "min_order_size", 5)
+        min_order = getattr(s, "min_order_size", 1)
         if shares < min_order:
             min_req_budget = min_order * token_ask
-            if bot_balance >= min_req_budget and min_req_budget <= (bot_balance * getattr(s, "max_stake_ratio", 0.20) * 1.25):
+            if bot_balance >= min_req_budget:
                 shares = min_order
             else:
                 return Opportunity(can_enter=False, reason="insufficient_balance")
