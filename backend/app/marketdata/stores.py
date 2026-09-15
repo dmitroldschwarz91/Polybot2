@@ -24,6 +24,66 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 RANGE_SAMPLE_SECS = 5.0
 
 
+def compute_time_weighted_twap(
+    ticks: List[Tuple[float, float]],
+    window_start: float,
+    window_end: float,
+) -> Tuple[Optional[float], float]:
+    """Computes exact piecewise-constant Zero-Order Hold Time-Weighted Average Price
+    over the window [window_start, window_end], along with coverage percentage.
+
+    ticks: list of (timestamp_sec, price) sorted chronologically.
+    Returns: (twap_price, coverage_pct) where coverage_pct is in [0.0, 1.0].
+    """
+    duration = window_end - window_start
+    if duration <= 0 or not ticks:
+        return None, 0.0
+
+    sorted_ticks = sorted(ticks, key=lambda x: x[0])
+
+    # Find active price at window_start (latest tick with t <= window_start)
+    last_price = None
+    for t, p in sorted_ticks:
+        if t <= window_start:
+            last_price = p
+        else:
+            break
+
+    # If no tick before window_start, fallback to first available tick in window
+    if last_price is None:
+        if sorted_ticks[0][0] > window_end:
+            return None, 0.0
+        last_price = sorted_ticks[0][1]
+        valid_start = sorted_ticks[0][0]
+    else:
+        valid_start = window_start
+
+    weighted_sum = 0.0
+    current_time = valid_start
+
+    for t, p in sorted_ticks:
+        if t <= window_start:
+            continue
+        if t >= window_end:
+            break
+        dt = t - current_time
+        if dt > 0:
+            weighted_sum += last_price * dt
+        last_price = p
+        current_time = t
+
+    if current_time < window_end:
+        dt = window_end - current_time
+        if dt > 0:
+            weighted_sum += last_price * dt
+
+    covered_duration = min(duration, max(0.0, window_end - valid_start))
+    coverage_pct = covered_duration / duration if duration > 0 else 0.0
+    twap_val = weighted_sum / duration
+
+    return twap_val, coverage_pct
+
+
 @dataclass
 class OrderBook:
     bids: List[dict] = field(default_factory=list)
@@ -137,31 +197,33 @@ class LivePriceStore:
         if not hist or (ts_sec - hist[-1][0]) >= 1.0:
             hist.append((ts_sec, value))
 
+    def get_reconstructed_twap(self, asset: str, window_secs: float = 60.0,
+                               end_time: Optional[float] = None) -> Tuple[Optional[float], float]:
+        """Reconstruct time-weighted TWAP and coverage from oracle tick history over [end_time - window_secs, end_time]."""
+        now = end_time if end_time is not None else time.time()
+        cutoff = now - window_secs
+        ch_hist = self.chainlink_history.get(asset) or self.binance_direct_history.get(asset) or self.binance_history.get(asset)
+        if not ch_hist:
+            return None, 0.0
+
+        ticks = []
+        for item in ch_hist:
+            ts_sec = (item[0] / 1000.0) if len(item) == 3 else item[0]
+            price = item[2] if len(item) == 3 else item[1]
+            ticks.append((ts_sec, price))
+
+        return compute_time_weighted_twap(ticks, cutoff, now)
+
     def get_chainlink_twap(self, asset: str, max_age: float = 120.0, window_secs: float = 60.0) -> Optional[float]:
         """Latest TWAP value (official stream if available, otherwise reconstructed from tick history)."""
-        now = time.time()
+        now = time.time()        
         if asset in self.chainlink_twap:
             if now - self.chainlink_twap_ts.get(asset, 0) <= max_age:
                 return self.chainlink_twap[asset]
-        # Reconstruct TWAP from 60s sliding window of oracle prices (Chainlink or Binance Direct)
-        cutoff = now - window_secs
-        hist = self.chainlink_history.get(asset)
-        if not hist or len(hist) < 2:
-            hist = self.binance_direct_history.get(asset)
-        if not hist or len(hist) < 2:
-            hist = self.binance_history.get(asset)
-        if not hist:
-            return None
-        vals = []
-        for item in hist:
-            ts_sec = (item[0] / 1000.0) if len(item) == 3 else item[0]
-            price = item[2] if len(item) == 3 else item[1]
-            if ts_sec >= cutoff:
-                vals.append(price)
-        if vals:
-            return sum(vals) / len(vals)
-        return None
-
+        # Reconstruct TWAP using exact piecewise time-weighting
+        twap, _ = self.get_reconstructed_twap(asset, window_secs=window_secs)
+        return twap
+        
     def get_twap_at(self, asset: str, t_sec: float, tolerance: float = 10.0, window_secs: float = 60.0) -> Optional[float]:
         """TWAP value whose observation time is nearest to t_sec."""
         hist = self.chainlink_twap_history.get(asset)
@@ -173,21 +235,9 @@ class LivePriceStore:
                     best_d, best_val = d, val
             if best_val is not None and best_d is not None and best_d <= tolerance:
                 return best_val
-        # Fallback: compute average over [t_sec - window_secs, t_sec] from history
-        cutoff_start = t_sec - window_secs
-        cutoff_end = t_sec + tolerance
-        ch_hist = self.chainlink_history.get(asset) or self.binance_direct_history.get(asset) or self.binance_history.get(asset)
-        if not ch_hist:
-            return None
-        vals = []
-        for item in ch_hist:
-            ts_sec = (item[0] / 1000.0) if len(item) == 3 else item[0]
-            price = item[2] if len(item) == 3 else item[1]
-            if cutoff_start <= ts_sec <= cutoff_end:
-                vals.append(price)
-        if vals:
-            return sum(vals) / len(vals)
-        return None
+        # Fallback: compute exact piecewise time-weighted average over [t_sec - window_secs, t_sec]
+        twap, _ = self.get_reconstructed_twap(asset, window_secs=window_secs, end_time=t_sec)
+        return twap
 
     def update_binance(self, asset: str, price: float) -> None:
         if asset not in self.binance_history:
