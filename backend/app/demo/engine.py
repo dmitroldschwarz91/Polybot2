@@ -61,10 +61,10 @@ from ..sample_io import append_sample
 DEMO_THRESHOLD = 0.75          # optimal entry threshold (walk-forward consensus)
 DEMO_SLIPPAGE = 0.01           # buy at ask + 1 tick (pessimistic)
 DEMO_FEE = 0.02                # Polymarket taker fee on winning side
-DEMO_STAKE_RATIO = 0.05        # Kelly ~20% -> quarter-Kelly 5% (WR~55%, иначе ruin)
+DEMO_STAKE_RATIO = 0.20        # 20% fractional Kelly compounding stake
 DEMO_ENTRY_START = 150         # vacuum scalp window start (secs before close)
 DEMO_ENTRY_END = 90            # vacuum scalp window end (no entries after 90s)
-DEMO_START_CAPITAL = 50.0
+DEMO_START_CAPITAL = 100.0
 
 # ZScore Reversal strategy (mean reversion + trailing stop)
 ZSCORE_MIN_Z = 1.5             # min |Z| for entry (moderate, not extreme)
@@ -593,15 +593,16 @@ class DemoEngine:
         fill_price = min(0.999, opp_price + DEMO_SLIPPAGE)
         stake = self.status.virtual_capital * self.stake_ratio
         shares = int(stake / fill_price) if fill_price > 0 else 0
-        if shares < 5:
-            if self.status.virtual_capital >= 5 * fill_price:
-                shares = 5
+        min_order = getattr(self.s, "min_order_size", 1)
+        if shares < min_order:
+            if self.status.virtual_capital >= min_order * fill_price:
+                shares = min_order
             else:
                 return
         cost = round(shares * fill_price, 4)
         if cost > self.status.virtual_capital:
-            shares = max(5, int(self.status.virtual_capital / fill_price))
-            if shares < 5:
+            shares = max(min_order, int(self.status.virtual_capital / fill_price))
+            if shares < min_order:
                 return
             cost = round(shares * fill_price, 4)
         self.status.virtual_capital = round(self.status.virtual_capital - cost, 4)
@@ -747,8 +748,9 @@ class DemoEngine:
         fill = min(0.999, p1 + DEMO_SLIPPAGE)
         stake = self.status.virtual_capital * self.stake_ratio
         shares = int(stake / fill) if fill > 0 else 0
-        if shares < 5:
-            shares = 5 if self.status.virtual_capital >= 5 * fill else 0
+        min_order = getattr(self.s, "min_order_size", 1)
+        if shares < min_order:
+            shares = min_order if self.status.virtual_capital >= min_order * fill else 0
         if shares == 0:
             return
         if ZPAIR_LIMIT_MODE:
@@ -765,8 +767,8 @@ class DemoEngine:
         else:
             cost = round(shares * fill, 4)
             if cost > self.status.virtual_capital:
-                shares = max(5, int(self.status.virtual_capital / fill))
-                if shares < 5:
+                shares = max(min_order, int(self.status.virtual_capital / fill))
+                if shares < min_order:
                     return
                 cost = round(shares * fill, 4)
             self.status.virtual_capital = round(self.status.virtual_capital - cost, 4)
@@ -851,10 +853,11 @@ class DemoEngine:
         fill = min(0.999, book.best_ask + DEMO_SLIPPAGE)
         shares = sig.shares
         cost = round(shares * fill, 4)
+        min_order = getattr(self.s, "min_order_size", 1)
         if cost > self.status.virtual_capital:           # shrink to affordable
-            shares = max(5, int(self.status.virtual_capital / fill))
+            shares = max(min_order, int(self.status.virtual_capital / fill))
             cost = round(shares * fill, 4)
-        if shares < 5 or cost > self.status.virtual_capital:
+        if shares < min_order or cost > self.status.virtual_capital:
             return
         self.status.virtual_capital = round(self.status.virtual_capital - cost, 4)
         pos = DemoPosition(
@@ -954,18 +957,19 @@ class DemoEngine:
         # compounding sizing: stake = capital * stake_ratio
         stake = self.status.virtual_capital * self.stake_ratio
         shares = int(stake / fill_price) if fill_price > 0 else 0
-        if shares < 5:   # min order
-            if self.status.virtual_capital >= 5 * fill_price:
-                shares = 5
+        min_order = getattr(self.s, "min_order_size", 1)
+        if shares < min_order:   # min order
+            if self.status.virtual_capital >= min_order * fill_price:
+                shares = min_order
             else:
                 return
         # Polymarket dynamic taker fee at match time: C * 0.07 * p * (1 - p)
         dyn_fee = polymarket_dynamic_taker_fee(shares, fill_price)
-        cost = round(shares * fill_price, 4)
+        cost = round(shares * fill_price, 4)        
         total_cost = cost + dyn_fee
         if total_cost > self.status.virtual_capital:
-            shares = max(5, int((self.status.virtual_capital - dyn_fee) / fill_price))
-            if shares < 5:
+            shares = max(min_order, int((self.status.virtual_capital - dyn_fee) / fill_price))
+            if shares < min_order:
                 return
             dyn_fee = polymarket_dynamic_taker_fee(shares, fill_price)
             cost = round(shares * fill_price, 4)
