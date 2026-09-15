@@ -67,12 +67,14 @@ def _ws_is_open(ws) -> bool:
 
 
 def normalize_asset(sym: str) -> Optional[str]:
-    """Normalize any crypto symbol variation to canonical uppercase asset ('BTC', 'ETH', 'SOL', 'XRP')."""
+    """Normalize any crypto symbol variation to canonical uppercase asset ('BTC', 'ETH', 'SOL', 'XRP').
+    Strictly avoids prefix false-positives (e.g. 'BTCDOM', 'ETHW', 'SOLO')."""
     if not sym:
         return None
     s = sym.upper().replace("/", "").replace("-", "").replace("_", "").strip()
     for base in ("BTC", "ETH", "SOL", "XRP"):
-        if s == base or s.startswith(base + "USD") or s == (base + "T") or s.startswith(base):
+        # Принимаются только точные совпадения базы и стандартных стейблкоинов:
+        if s == base or s in (base + "USD", base + "USDT", base + "USDC"):
             return base
     return None
 
