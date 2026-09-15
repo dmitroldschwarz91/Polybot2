@@ -28,6 +28,7 @@ def compute_time_weighted_twap(
     ticks: List[Tuple[float, float]],
     window_start: float,
     window_end: float,
+    max_lookback_secs: float = 120.0,
 ) -> Tuple[Optional[float], float]:
     """Computes exact piecewise-constant Zero-Order Hold Time-Weighted Average Price
     over the window [window_start, window_end], along with coverage percentage.
@@ -43,18 +44,25 @@ def compute_time_weighted_twap(
 
     # Find active price at window_start (latest tick with t <= window_start)
     last_price = None
+    last_tick_t = None
     for t, p in sorted_ticks:
         if t <= window_start:
             last_price = p
+            last_tick_t = t
         else:
             break
 
-    # If no tick before window_start, fallback to first available tick in window
+    # If tick is older than max_lookback_secs before window_start, reject it as stale
+    if last_tick_t is not None and (window_start - last_tick_t) > max_lookback_secs:
+        last_price = None
+
+    # If no valid tick before window_start, fallback to first available tick in window
     if last_price is None:
-        if sorted_ticks[0][0] > window_end:
+        first_in_window = [x for x in sorted_ticks if x[0] >= window_start]
+        if not first_in_window or first_in_window[0][0] > window_end:
             return None, 0.0
-        last_price = sorted_ticks[0][1]
-        valid_start = sorted_ticks[0][0]
+        last_price = first_in_window[0][1]
+        valid_start = first_in_window[0][0]
     else:
         valid_start = window_start
 
@@ -199,20 +207,46 @@ class LivePriceStore:
 
     def get_reconstructed_twap(self, asset: str, window_secs: float = 60.0,
                                end_time: Optional[float] = None) -> Tuple[Optional[float], float]:
-        """Reconstruct time-weighted TWAP and coverage from oracle tick history over [end_time - window_secs, end_time]."""
+        """Reconstruct time-weighted TWAP and coverage from oracle tick history over [end_time - window_secs, end_time].
+        Dynamically selects the freshest active stream (Chainlink, Binance direct, or Binance RTDS)."""
         now = end_time if end_time is not None else time.time()
         cutoff = now - window_secs
-        ch_hist = self.chainlink_history.get(asset) or self.binance_direct_history.get(asset) or self.binance_history.get(asset)
-        if not ch_hist:
+
+        candidates = []
+        for name, hist in [
+            ("chainlink", self.chainlink_history.get(asset)),
+            ("binance_direct", self.binance_direct_history.get(asset)),
+            ("binance", self.binance_history.get(asset)),
+        ]:
+            if not hist:
+                continue
+            ticks = []
+            for item in hist:
+                if len(item) == 3:
+                    raw_ts, local_ts, price = item
+                    ts_sec = (raw_ts / 1000.0) if raw_ts > 1e11 else float(raw_ts)
+                    # If raw_ts is invalid or > 24h away, fallback to local arrival ts
+                    if abs(now - ts_sec) > 86400:
+                        ts_sec = local_ts
+                elif len(item) == 2:
+                    ts_sec, price = item
+                else:
+                    continue
+                if price is not None and price > 0:
+                    ticks.append((ts_sec, price))
+            if ticks:
+                # Store latest tick timestamp and ticks
+                latest_ts = ticks[-1][0]
+                candidates.append((latest_ts, ticks))
+
+        if not candidates:
             return None, 0.0
 
-        ticks = []
-        for item in ch_hist:
-            ts_sec = (item[0] / 1000.0) if len(item) == 3 else item[0]
-            price = item[2] if len(item) == 3 else item[1]
-            ticks.append((ts_sec, price))
+        # Sort candidates so the feed with the most recent tick is preferred
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_ticks = candidates[0][1]
 
-        return compute_time_weighted_twap(ticks, cutoff, now)
+        return compute_time_weighted_twap(best_ticks, cutoff, now)
 
     def get_chainlink_twap(self, asset: str, max_age: float = 120.0, window_secs: float = 60.0) -> Optional[float]:
         """Latest TWAP value (official stream if available, otherwise reconstructed from tick history)."""
