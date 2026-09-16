@@ -328,7 +328,14 @@ async def test_pre_flight_orderbook_check(settings):
     entered = await bot._enter(strat, "BTC", market, opp)
     assert entered is False
 
-    # Case 2: Fresh book depth vanished (< twap_min_level_depth = 5)
+    # Case 2: Fresh book depth vanished (< twap_min_level_depth = 5 across 1 cent slippage)
     bot.prices.update_full_book(token_id, [], [{"price": "0.85", "size": "2"}])
     entered = await bot._enter(strat, "BTC", market, opp)
     assert entered is False
+
+    # Case 3: Depth distributed across 2 levels (2 @ 0.85 and 10 @ 0.86) within 1 cent slippage -> OK
+    from unittest.mock import AsyncMock
+    bot.prices.update_full_book(token_id, [], [{"price": "0.85", "size": "2"}, {"price": "0.86", "size": "10"}])
+    bot.executor.execute_buy = AsyncMock(return_value={"success": True, "order_id": "ord_1", "price": 0.85, "size": 23, "cost": 19.55})
+    entered = await bot._enter(strat, "BTC", market, opp)
+    assert entered is True
