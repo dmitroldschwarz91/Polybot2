@@ -145,9 +145,13 @@ class TWAPInertiaStrategy(BaseStrategy):
             return Opportunity(can_enter=False, reason="token_price_too_high",
                                extra={"token_ask": token_ask, "max_ask": max_ask})
 
-        # 5. Liquidity & Depth at best_ask check
+        # 5. Liquidity & Depth within slippage budget (best_ask + slippage)
         min_depth = getattr(s, "twap_min_level_depth", 5)
-        depth_size = prices.ask_size_at(token_id, token_ask) if hasattr(prices, "ask_size_at") else None
+        slippage_tol = getattr(s, "twap_slippage_tol", 0.01)
+        max_buy_price = token_ask + slippage_tol
+        depth_size = prices.ask_volume_up_to(token_id, max_buy_price) if hasattr(prices, "ask_volume_up_to") else None
+        if depth_size is None and hasattr(prices, "ask_size_at"):
+            depth_size = prices.ask_size_at(token_id, token_ask)
         if depth_size is None and getattr(book, "ask_volume", 0) > 0 and token_ask > 0:
             depth_size = book.ask_volume / token_ask
 
