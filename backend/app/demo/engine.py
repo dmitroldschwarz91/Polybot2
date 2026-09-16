@@ -503,7 +503,7 @@ class DemoEngine:
             else:
                 if stc <= DEMO_ENTRY_END or stc > DEMO_ENTRY_START:
                     continue
-
+                 
             if market["slug"] in self.traded:
                 continue
 
@@ -615,10 +615,12 @@ class DemoEngine:
         )
         self.positions[market["slug"]] = pos
         self.traded.add(market["slug"])
+        op_str = f"${op:.4f}" if op < 10.0 else f"${op:.1f}"
+        vwap_str = f"${vwap:.4f}" if vwap < 10.0 else f"${vwap:.1f}"
         self.log.info(
             f"[DEMO] ZSCORE ENTRY {asset} {direction} | Z={z:+.1f} | "
             f"{shares}sh @ ${fill_price:.3f}=${cost:.2f} | "
-            f"oracle=${op:.1f} vwap=${vwap:.1f}"
+            f"oracle={op_str} vwap={vwap_str}"
         )
 
     def _check_trailing_exits(self) -> None:
@@ -728,7 +730,7 @@ class DemoEngine:
                 "secs_to_close": int(stc),
                 "z_score": round(z, 2) if z is not None else None,
                 "oracle_price": op,
-                "vwap": round(vwap, 2) if vwap is not None else None,
+                "vwap": round(vwap, 4) if vwap is not None else None,
                 "direction": direction,
                 "bought_ask": round(p1, 4) if p1 is not None else None,
                 "up_ask": _ub.best_ask if _ub else None,
@@ -944,25 +946,51 @@ class DemoEngine:
             )
 
     def _simulate_entry(self, market: dict, asset: str, opp: Opportunity) -> None:
-        """Simulate an instant fill at the real best_ask + slippage."""
+        """Simulate an instant fill at the real orderbook with slippage and depth checking."""
         token_id = opp.token_id
         book = self.prices.get_book(token_id)
         if not book or book.best_ask is None:
             self.log.debug(f"[DEMO] {asset} no book for entry")
             return
 
-        # fill at real ask + slippage (pessimistic)
+        # Pre-Flight Orderbook Re-verification (Latency & slippage guard matching live engine)
+        max_allowed = getattr(self.s, "twap_max_token_ask", 0.92) if self.strategy_name == "twap_inertia" else 0.99
+        if book.best_ask > max_allowed or book.best_ask > opp.entry_price + 0.02:
+            self.log.warning(f"[DEMO] [{asset}] Pre-flight abort: best_ask moved from ${opp.entry_price:.3f} to ${book.best_ask:.3f}")
+            return
+
+        # Check cumulative available depth within acceptable slippage budget (best_ask + DEMO_SLIPPAGE)
+        slippage_tol = getattr(self.s, "twap_slippage_tol", DEMO_SLIPPAGE)
+        max_buy_price = book.best_ask + slippage_tol
+        available_depth = self.prices.ask_volume_up_to(token_id, max_buy_price)
+        if available_depth is None:
+            available_depth = self.prices.ask_size_at(token_id, book.best_ask)
+        if available_depth is None and getattr(book, "ask_volume", 0) > 0 and book.best_ask > 0:
+            available_depth = book.ask_volume / book.best_ask
+
+        min_depth = getattr(self.s, "twap_min_level_depth", 5)
+        if available_depth is not None and available_depth < min_depth:
+            self.log.warning(f"[DEMO] [{asset}] Pre-flight abort: depth up to ${max_buy_price:.3f} too shallow ({available_depth} shares)")
+            return
+
+        # fill at real ask + slippage (pessimistic / realistic)
         fill_price = min(0.999, book.best_ask + DEMO_SLIPPAGE)
 
         # compounding sizing: stake = capital * stake_ratio
         stake = self.status.virtual_capital * self.stake_ratio
         shares = int(stake / fill_price) if fill_price > 0 else 0
+        
+        # Cap shares to available depth across acceptable slippage levels
+        if available_depth is not None and available_depth >= min_depth:
+            shares = min(shares, int(available_depth))
+
         min_order = getattr(self.s, "min_order_size", 1)
         if shares < min_order:   # min order
             if self.status.virtual_capital >= min_order * fill_price:
                 shares = min_order
             else:
                 return
+             
         # Polymarket dynamic taker fee at match time: C * 0.07 * p * (1 - p)
         dyn_fee = polymarket_dynamic_taker_fee(shares, fill_price)
         cost = round(shares * fill_price, 4)        
@@ -987,11 +1015,17 @@ class DemoEngine:
         self.positions[market["slug"]] = pos
         self.traded.add(market["slug"])
 
+        op_fmt = f"${opp.oracle_price:.4f}" if opp.oracle_price < 10.0 else f"${opp.oracle_price:.2f}"
+        extra_info = ""
+        if opp.extra and "barrier_pct" in opp.extra:
+            extra_info = f" barrier: {opp.extra['barrier_pct']*100:.3f}%"
+        if available_depth is not None:
+            extra_info += f" depth: {int(available_depth)}sh"
         self.log.info(
             f"[DEMO] ENTRY {asset} {opp.direction} | "
             f"{shares} shares @ ${fill_price:.3f} = ${cost:.2f} | "
             f"capital: ${self.status.virtual_capital:.2f} | "
-            f"oracle: ${opp.oracle_price:.2f} dev: {(opp.deviation or 0)*100:+.3f}%"
+            f"oracle: {op_fmt} dev: {(opp.deviation or 0)*100:+.3f}%{extra_info}"
         )
 
     async def _resolve_positions(self) -> None:
