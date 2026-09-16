@@ -476,10 +476,14 @@ class TradingEngine:
             if fresh_book.best_ask > max_allowed or fresh_book.best_ask > opp.entry_price + 0.02:
                 self.log.warning(f"[{asset}] Pre-flight abort: best_ask moved from ${opp.entry_price:.3f} to ${fresh_book.best_ask:.3f}")
                 return False
-            # Check if book depth at best_ask level vanished
-            ask_at_size = self.prices.ask_size_at(token_id, fresh_book.best_ask)
-            if ask_at_size is not None and ask_at_size < getattr(self.s, "twap_min_level_depth", 5):
-                self.log.warning(f"[{asset}] Pre-flight abort: best_ask depth too shallow ({ask_at_size} shares)")
+            # Check if book depth within acceptable slippage budget vanished
+            slippage_tol = getattr(self.s, "twap_slippage_tol", 0.01) if strat.entry_type == EntryType.TWAP_INERTIA else 0.01
+            max_buy_price = fresh_book.best_ask + slippage_tol
+            depth_size = self.prices.ask_volume_up_to(token_id, max_buy_price)
+            if depth_size is None:
+                depth_size = self.prices.ask_size_at(token_id, fresh_book.best_ask)
+            if depth_size is not None and depth_size < getattr(self.s, "twap_min_level_depth", 5):
+                self.log.warning(f"[{asset}] Pre-flight abort: depth up to ${max_buy_price:.3f} too shallow ({depth_size} shares)")
                 return False
                 
         # sizing
