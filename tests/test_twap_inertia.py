@@ -5,7 +5,7 @@ from backend.app.strategies.twap_inertia import TWAPInertiaStrategy
 from backend.app.marketdata.stores import LivePriceStore, OrderBook
 from backend.app.marketdata.markets import MarketData
 from backend.app.risk.manager import RiskManager
-from backend.app.sample_io import AsyncSampleBuffer, format_sample_row, FIELDS
+from backend.app.sample_io import AsyncSampleBuffer, format_sample_row, load_samples, FIELDS
 
 
 class DummyHTTP:
@@ -46,7 +46,10 @@ def test_twap_inertia_valid_entry(env):
     cur_interval = int(now // 300) * 300
     market_data.start_prices[str(cur_interval)] = {asset: 80000.0}
 
-    # Setup live TWAP & oracle (accumulated +0.04% above open)
+    # Setup live TWAP & oracle (accumulated +0.04% above open).
+    # Keep an explicit interval-open TWAP so the test is not sensitive to being
+    # executed within get_twap_at()'s 10s boundary tolerance.
+    prices.chainlink_twap_history[asset].append((float(cur_interval), 80000.0))
     prices.update_chainlink_twap(asset, 80032.0, now)
     prices.update_binance_direct(asset, 80035.0, 1.0)
     prices.chainlink_ts[asset] = now
@@ -83,6 +86,38 @@ def test_twap_inertia_valid_entry(env):
     assert opp.extra["barrier_pct"] == 0.08
 
 
+def test_twap_inertia_rejects_bad_twap_scale(env):
+    strategy, prices, market_data, risk = env
+    now = time.time()
+
+    asset = "BTC"
+    cur_interval = int(now // 300) * 300
+    market_data.start_prices[str(cur_interval)] = {asset: 80000.0}
+
+    # Pathological TWAP decoder/feed value: off by ~70% from spot.
+    prices.chainlink_twap_history[asset].append((float(cur_interval), 80000.0))
+    prices.update_chainlink_twap(asset, 23000.0, now)
+    prices.update_binance_direct(asset, 80035.0, 1.0)
+    prices.chainlink_ts[asset] = now
+
+    up_token = "tok_up_bad_twap"
+    down_token = "tok_down_bad_twap"
+    prices.update_full_book(up_token, [{"price": "0.84", "size": "100"}], [{"price": "0.85", "size": "50"}])
+    prices.update_full_book(down_token, [{"price": "0.14", "size": "100"}], [{"price": "0.15", "size": "50"}])
+
+    market = {
+        "slug": "btc-5m-bad-twap",
+        "end_ts": now + 20.0,
+        "up_token_id": up_token,
+        "down_token_id": down_token,
+        "target_price": 80000.0,
+    }
+
+    opp = strategy.check(market, asset, set(), 100.0, prices, market_data, risk)
+    assert opp.can_enter is False
+    assert opp.reason == "twap_sanity_failed"
+
+
 def test_twap_inertia_rejects_frozen_book(env):
     strategy, prices, market_data, risk = env
     now = time.time()
@@ -91,6 +126,7 @@ def test_twap_inertia_rejects_frozen_book(env):
     cur_interval = int(now // 300) * 300
     market_data.start_prices[str(cur_interval)] = {asset: 80000.0}
 
+    prices.chainlink_twap_history[asset].append((float(cur_interval), 80000.0))
     prices.update_chainlink_twap(asset, 80040.0, now)
     prices.update_binance_direct(asset, 80040.0, 1.0)
     prices.chainlink_ts[asset] = now
@@ -131,6 +167,7 @@ def test_twap_inertia_rejects_stale_feed(env):
     market_data.start_prices[str(cur_interval)] = {asset: 80000.0}
 
     # Stale TWAP feed (> 60.0 seconds old)
+    prices.chainlink_twap_history[asset].append((float(cur_interval), 80000.0))
     prices.update_chainlink_twap(asset, 80050.0, now - 70.0)
     prices.chainlink_ts[asset] = now - 70.0
 
@@ -190,6 +227,29 @@ def test_compute_time_weighted_twap_piecewise():
     assert cov == 1.0
 
 
+def test_reconstructed_twap_prefers_covered_downsampled_history():
+    prices = LivePriceStore(["BTC"], 30.0)
+    now = time.time()
+    asset = "BTC"
+
+    # Simulates a high-volume BTC aggTrade deque after maxlen truncation: the
+    # dense history is freshest but covers only the last 10 seconds, which used
+    # to produce a bogus ~0.17 * spot TWAP.
+    prices.binance_direct_history[asset].clear()
+    for ts in (now - 10.0, now - 5.0, now):
+        prices.binance_direct_history[asset].append((ts, 80000.0))
+
+    # The 1s/downsampled history keeps a point before the 60s window and should
+    # be selected because it has full time coverage.
+    prices.twap_reconstruction_history[asset].clear()
+    for ts in (now - 70.0, now - 30.0, now):
+        prices.twap_reconstruction_history[asset].append((ts, 80000.0))
+
+    twap, cov = prices.get_reconstructed_twap(asset, window_secs=60.0, end_time=now)
+    assert round(twap, 2) == 80000.0
+    assert cov == 1.0
+
+
 def test_twap_inertia_rejects_insufficient_coverage(env):
     strategy, prices, market_data, risk = env
     now = time.time()
@@ -246,6 +306,20 @@ async def test_async_sample_buffer(tmp_path):
     assert content.startswith("# ts\tasset")
     assert "btc-5m-1" in content
     assert "eth-5m-1" in content
+
+
+def test_load_samples_headerless_tsv_chunk(tmp_path):
+    """Split demo sample chunks after part01 may not contain the TSV header."""
+    log_file = tmp_path / "sample_part02.xml"
+    rec1 = {"ts": 12345, "asset": "BTC", "slug": "btc-5m-1", "secs_to_close": 20, "twap": 80000.0}
+    rec2 = {"ts": 12346, "asset": "ETH", "slug": "eth-5m-1", "secs_to_close": 19, "twap": 3000.0}
+    log_file.write_text(format_sample_row(rec1) + "\n" + format_sample_row(rec2) + "\n", encoding="utf-8")
+
+    loaded = load_samples(log_file)
+
+    assert loaded["btc-5m-1"][0]["asset"] == "BTC"
+    assert loaded["btc-5m-1"][0]["secs_to_close"] == 20
+    assert loaded["eth-5m-1"][0]["twap"] == 3000.0
 
 
 @pytest.mark.asyncio

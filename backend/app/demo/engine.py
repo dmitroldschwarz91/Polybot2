@@ -6,11 +6,12 @@ Connects to the SAME real-time feeds as the live bot (Binance, Polymarket
 market channel, RTDS Chainlink) but executes trades in a virtual account:
   * Entries are filled instantly at the real best_ask (+slippage) from the
     live order book — no CLOB API key needed.
-  * Capital is virtual ($15 by default) and compounds: wins grow it, losses
-    shrink it, just like the compounding analysis showed.
+  * Capital is virtual and compounds: wins grow it, losses shrink it, just
+    like the compounding analysis showed.
   * Positions resolve at real market close (HOLD mode — our walk-forward
     proved HOLD beats TP/SL).
-  * Settings default to the walk-forward consensus: threshold 0.75, sr ~30%.
+  * TWAP Inertia uses the configured Settings.max_stake_ratio source of truth;
+    legacy demo threshold/stake controls are kept only for older strategies.
 
 This lets you watch the strategy run against the real market — see real
 entries, real fills, real outcomes — with zero financial risk.
@@ -166,7 +167,7 @@ class DemoEngine:
                  log: Optional[StructuredLogger] = None,
                  start_capital: float = DEMO_START_CAPITAL,
                  threshold: float = DEMO_THRESHOLD,
-                 stake_ratio: float = DEMO_STAKE_RATIO,
+                 stake_ratio: Optional[float] = None,
                  strategy: str = "vacuum_scalp",
                  assets: Optional[List[str]] = None) -> None:
         self.s = settings
@@ -177,14 +178,20 @@ class DemoEngine:
         )
         self.start_capital = start_capital
         self.threshold = threshold
-        self.stake_ratio = stake_ratio
         self.strategy_name = strategy
+        self.requested_stake_ratio = stake_ratio
         chosen_assets = [a.strip().upper() for a in assets] if assets else list(settings.assets)
 
         # strategy + risk
         self.s_demo = settings.model_copy()
         self.s_demo.vacuum_scalp_enabled = True
-        self.s_demo.max_stake_ratio = stake_ratio
+        # TWAP Inertia should not inherit stale UI/demo constants. The source of
+        # truth is Settings.max_stake_ratio (0.20 by default / env-overridable).
+        if self.strategy_name == "twap_inertia":
+            self.stake_ratio = float(getattr(settings, "max_stake_ratio", DEMO_STAKE_RATIO))
+        else:
+            self.stake_ratio = float(stake_ratio if stake_ratio is not None else DEMO_STAKE_RATIO)
+        self.s_demo.max_stake_ratio = self.stake_ratio
         self.s_demo.assets = chosen_assets
         self.s_demo.max_concurrent_positions = max(1, len(chosen_assets))
         # демо: отключаем лимиты убытков — при WR 55% просадки 40%+ штатны,
@@ -296,8 +303,31 @@ class DemoEngine:
             return
         self.log.info("=" * 60)
         self.log.info("DEMO ENGINE — live data, virtual money")
-        self.log.info(f"Capital: ${self.start_capital} | Threshold: {self.threshold} | "
-                      f"Stake: {self.stake_ratio:.0%} | Mode: HOLD")
+        if self.strategy_name == "twap_inertia":
+            if (self.requested_stake_ratio is not None
+                    and abs(float(self.requested_stake_ratio) - self.stake_ratio) > 1e-12):
+                self.log.warning(
+                    "[DEMO] Ignoring legacy demo stake_ratio override for TWAP Inertia",
+                    requested_stake_ratio=self.requested_stake_ratio,
+                    effective_stake_ratio=self.stake_ratio,
+                )
+            self.log.info(
+                "DEMO config",
+                strategy=self.strategy_name,
+                capital=self.start_capital,
+                stake_ratio=self.stake_ratio,
+                stc_min=self.s.twap_stc_min,
+                stc_max=self.s.twap_stc_max,
+                min_dev_pct=self.s.twap_min_dev_pct,
+                min_barrier_pct=self.s.twap_min_barrier_pct,
+                token_ask_min=self.s.twap_min_token_ask,
+                token_ask_max=self.s.twap_max_token_ask,
+                slippage_tol=getattr(self.s, "twap_slippage_tol", DEMO_SLIPPAGE),
+                mode="HOLD",
+            )
+        else:
+            self.log.info(f"Capital: ${self.start_capital} | Threshold: {self.threshold} | "
+                          f"Stake: {self.stake_ratio:.0%} | Mode: HOLD")
         self.log.info(f"NO real orders. NO API key needed.")
         self.log.info("=" * 60)
 
@@ -959,7 +989,8 @@ class DemoEngine:
             self.log.warning(f"[DEMO] [{asset}] Pre-flight abort: best_ask moved from ${opp.entry_price:.3f} to ${book.best_ask:.3f}")
             return
 
-        # Check cumulative available depth within acceptable slippage budget (best_ask + DEMO_SLIPPAGE)
+        # Check cumulative available depth within acceptable slippage budget
+        # (best_ask + twap_slippage_tol).
         slippage_tol = getattr(self.s, "twap_slippage_tol", DEMO_SLIPPAGE)
         max_buy_price = book.best_ask + slippage_tol
         available_depth = self.prices.ask_volume_up_to(token_id, max_buy_price)
@@ -973,8 +1004,9 @@ class DemoEngine:
             self.log.warning(f"[DEMO] [{asset}] Pre-flight abort: depth up to ${max_buy_price:.3f} too shallow ({available_depth} shares)")
             return
 
-        # fill at real ask + slippage (pessimistic / realistic)
-        fill_price = min(0.999, book.best_ask + DEMO_SLIPPAGE)
+        # fill at real ask + the same slippage tolerance used for depth accounting
+        # (best_ask + 0.01 by default).
+        fill_price = min(0.999, book.best_ask + slippage_tol)
 
         # compounding sizing: stake = capital * stake_ratio
         stake = self.status.virtual_capital * self.stake_ratio

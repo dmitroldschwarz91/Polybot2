@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     twap_stc_max: float = 35.0            # window for accumulated TWAP mass (10-35s)
     twap_max_feed_age: float = 3.0        # max age for TWAP/oracle feeds (outage watchdog)
     twap_min_coverage_pct: float = 0.70   # min coverage percentage of oracle ticks in 60s window
+    twap_sanity_max_rel_diff: float = 0.02 # reject TWAP/open values >2% away from spot/open (feed decode guard)
+    twap_slippage_tol: float = 0.01       # count executable depth up to best_ask + this tolerance
     twap_min_level_depth: int = 5         # min shares available at best_ask level
 
     # ── Spread capture / hedge-lite ───────────────────────────────────────
@@ -205,6 +207,8 @@ class Settings(BaseSettings):
     http_timeout: float = 10.0
     http_retries: int = 3
     gamma_cache_ttl: float = 2.0
+    rtds_binance_enabled: bool = True      # filtered RTDS Binance backup; Binance-direct remains primary
+    rtds_split_by_asset: bool = True       # isolate RTDS streams; multi-asset wildcard batches degraded in logs
 
     chainlink_symbols: Dict[str, str] = Field(
         default_factory=lambda: {

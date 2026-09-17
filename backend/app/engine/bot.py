@@ -467,7 +467,9 @@ class TradingEngine:
         imb = opp.imbalance
         tick_size, neg_risk = self.client.get_market_params(token_id) if not self.client.paper else ("0.01", False)
         from ..execution.orders import round_to_tick
-        buy_price = round_to_tick(opp.entry_price, tick_size)
+        slippage_tol = getattr(self.s, "twap_slippage_tol", 0.01) if strat.entry_type == EntryType.TWAP_INERTIA else 0.0
+        reference_ask = opp.entry_price
+        depth_size = None
 
         # Pre-Flight Orderbook Re-verification (Casatrick latency & slippage guard)
         fresh_book = self.prices.get_book(token_id)
@@ -476,15 +478,21 @@ class TradingEngine:
             if fresh_book.best_ask > max_allowed or fresh_book.best_ask > opp.entry_price + 0.02:
                 self.log.warning(f"[{asset}] Pre-flight abort: best_ask moved from ${opp.entry_price:.3f} to ${fresh_book.best_ask:.3f}")
                 return False
-            # Check if book depth within acceptable slippage budget vanished
-            slippage_tol = getattr(self.s, "twap_slippage_tol", 0.01) if strat.entry_type == EntryType.TWAP_INERTIA else 0.01
-            max_buy_price = fresh_book.best_ask + slippage_tol
+            reference_ask = fresh_book.best_ask
+            # Check if book depth within acceptable slippage budget vanished.
+            # For TWAP entries the executable limit is best_ask + twap_slippage_tol,
+            # so both depth accounting and the actual order price must use the
+            # same price band.
+            max_buy_price = reference_ask + slippage_tol
             depth_size = self.prices.ask_volume_up_to(token_id, max_buy_price)
             if depth_size is None:
-                depth_size = self.prices.ask_size_at(token_id, fresh_book.best_ask)
+                depth_size = self.prices.ask_size_at(token_id, reference_ask)
             if depth_size is not None and depth_size < getattr(self.s, "twap_min_level_depth", 5):
                 self.log.warning(f"[{asset}] Pre-flight abort: depth up to ${max_buy_price:.3f} too shallow ({depth_size} shares)")
                 return False
+
+        limit_price = min(0.999, reference_ask + slippage_tol)
+        buy_price = round_to_tick(limit_price, tick_size)
                 
         # sizing
         avail = await run_sync(self.client.get_real_balance)
@@ -509,6 +517,8 @@ class TradingEngine:
         if stake <= 0:
             return False
         size = round_size(stake / buy_price)
+        if depth_size is not None and strat.entry_type == EntryType.TWAP_INERTIA:
+            size = min(size, int(depth_size))
         if size < self.s.min_order_size:
             return False
         cost = round(size * buy_price, 4)
@@ -520,7 +530,9 @@ class TradingEngine:
 
         self.log.info(f"[{asset}] ENTRY {direction} [{strat.entry_type.value}]",
                       price=buy_price, lots=size, cost=f"${cost:.2f}",
-                      stake_budget=f"${stake:.2f}", dev=f"{(opp.deviation or 0)*100:+.3f}%")
+                      stake_budget=f"${stake:.2f}",
+                      depth=(round(depth_size, 2) if depth_size is not None else None),
+                      dev=f"{(opp.deviation or 0)*100:+.3f}%")
 
         result = await self.executor.execute_buy(token_id, buy_price, size, asset,
                                                  max_budget=cost * 1.05)

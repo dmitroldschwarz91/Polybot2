@@ -138,15 +138,29 @@ class BookPoller:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _poll_token(self, token_id: str) -> None:
-        """Fetch best_bid and best_ask for a single token via REST API."""
+        """Fetch a fresh order book for one token via REST API.
+
+        Prefer /book over /price because strategies need *depth at level*, not
+        just top-of-book. If /book is unavailable, fall back to /price. Per
+        Polymarket CLOB semantics, side=BUY is the price you pay to buy (best
+        ask), while side=SELL is the price you receive when selling (best bid).
+        """
         self.polls_done += 1
-        base = self.s.clob_api
 
         try:
-            # Fetch BUY price (= best_bid) and SELL price (= best_ask)
+            book = await self._fetch_book(token_id)
+            if book and isinstance(book, dict):
+                bids = book.get("bids") or []
+                asks = book.get("asks") or []
+                if isinstance(bids, list) and isinstance(asks, list) and (bids or asks):
+                    self.prices.update_full_book(token_id, bids, asks)
+                    self.polls_ok += 1
+                    return
+
+            # Fallback: fetch top-of-book only.
             buy_data, sell_data = await asyncio.gather(
-                self._fetch_price(token_id, "BUY"),
-                self._fetch_price(token_id, "SELL"),
+                self._fetch_price(token_id, "BUY"),   # best ask
+                self._fetch_price(token_id, "SELL"),  # best bid
             )
 
             best_bid = None
@@ -154,13 +168,13 @@ class BookPoller:
 
             if buy_data and "price" in buy_data:
                 try:
-                    best_bid = float(buy_data["price"])
+                    best_ask = float(buy_data["price"])
                 except (ValueError, TypeError):
                     pass
 
             if sell_data and "price" in sell_data:
                 try:
-                    best_ask = float(sell_data["price"])
+                    best_bid = float(sell_data["price"])
                 except (ValueError, TypeError):
                     pass
 
@@ -171,6 +185,19 @@ class BookPoller:
                 self.polls_fail += 1
         except Exception:
             self.polls_fail += 1
+
+    async def _fetch_book(self, token_id: str) -> Optional[dict]:
+        """Fetch /book endpoint for one token."""
+        url = f"{self.s.clob_api}/book"
+        params = {"token_id": token_id}
+        headers = {"User-Agent": "polymarket-bot/6.0"}
+        try:
+            async with self._session.get(url, params=params, headers=headers) as r:
+                if r.status != 200:
+                    return None
+                return await r.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            return None
 
     async def _fetch_price(self, token_id: str, side: str) -> Optional[dict]:
         """Fetch /price endpoint for one side."""

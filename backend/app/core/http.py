@@ -37,14 +37,22 @@ class AsyncHTTP:
             )
         return self._session
 
-    async def get(self, url: str, params=None):
+    async def get(self, url: str, params=None, timeout: float | None = None, headers: dict | None = None):
+        """GET JSON with per-call timeout/header overrides.
+
+        Several market-data paths need short startup probes (e.g. Binance REST
+        seeding) while Gamma/CLOB lookups can tolerate the default timeout.
+        Returning None keeps callers fail-soft, but the signature must accept
+        these overrides or the fallback path silently never runs.
+        """
         try:
             sess = await self.session()
-            timeout = aiohttp.ClientTimeout(total=settings_total, connect=5)
-            async with sess.get(url, params=params, timeout=timeout) as r:
+            total = settings_total if timeout is None else timeout
+            req_timeout = aiohttp.ClientTimeout(total=total, connect=min(5, total))
+            async with sess.get(url, params=params, timeout=req_timeout, headers=headers) as r:
                 r.raise_for_status()
-                return await r.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError):
+                return await r.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError, ValueError):
             return None
 
     async def close(self) -> None:
