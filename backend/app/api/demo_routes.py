@@ -57,7 +57,10 @@ def create_demo_router(settings: Settings) -> APIRouter:
             return {"ok": True, "msg": "already running"}
         capital = req.start_capital or DEMO_START_CAPITAL
         thr = req.threshold or DEMO_THRESHOLD
-        sr = req.stake_ratio or DEMO_STAKE_RATIO
+        # Pass None through so DemoEngine can apply strategy-specific defaults.
+        # In particular, TWAP Inertia uses Settings.max_stake_ratio instead of
+        # stale legacy demo stake controls.
+        sr = req.stake_ratio
         strat = req.strategy or "twap_inertia"
         chosen_assets = req.assets if req.assets else settings.assets
         if eng:
@@ -67,7 +70,8 @@ def create_demo_router(settings: Settings) -> APIRouter:
                                  assets=chosen_assets)
         await demo_engine.start()
         return {"ok": True, "config": {"start_capital": capital,
-                                        "threshold": thr, "stake_ratio": sr,
+                                        "threshold": thr, "stake_ratio": demo_engine.stake_ratio,
+                                        "requested_stake_ratio": sr,
                                         "strategy": strat,
                                         "assets": chosen_assets}}
 

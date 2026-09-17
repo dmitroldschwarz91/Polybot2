@@ -1,0 +1,1807 @@
+{
+  "generated_at": "2026-09-17T15:16:10.328339+00:00",
+  "notes": {
+    "selection": "per interval: max barrier_pct, then max abs(dev_twap_pct), then earliest timestamp",
+    "fees": "Polymarket crypto dynamic taker fee per share = 0.07*p*(1-p), charged at entry in both win and loss cases",
+    "fill": "best ask + 0.01 slippage, capped at 0.999; depth capped by logged best ask size/ask volume",
+    "quality_filter": "entry/resolution TWAP rows require twap and twap_open within 2% of concurrently logged oracle/open",
+    "gamma_cache": "reports/gamma_outcomes.json",
+    "gamma_cache_size": 13,
+    "cross_disagree_fallback": "exclude"
+  },
+  "quality": {
+    "total_rows": 190971,
+    "total_intervals": 2216,
+    "assets": {
+      "BTC": {
+        "rows": 47752,
+        "intervals": 554,
+        "range": [
+          "2026-09-15T16:45:00Z",
+          "2026-09-17T14:55:00Z"
+        ],
+        "rows_per_interval_min_median_max": [
+          27,
+          88.0,
+          95
+        ],
+        "final60_coverage_ok": 552,
+        "entry_window_coverage_ok": 552,
+        "book_any_interval": 550,
+        "token_labeled": 551,
+        "sane_entry_twap_intervals": 374,
+        "label_methods": {
+          "token_only": 220,
+          "cross_ok": 317,
+          "gamma_from_cross_disagree": 1,
+          "cross_disagree": 13,
+          "gamma_from_unresolved": 3
+        },
+        "needs_gamma_after_cache": 13,
+        "usable_for_wfo": 261
+      },
+      "ETH": {
+        "rows": 47745,
+        "intervals": 554,
+        "range": [
+          "2026-09-15T16:45:00Z",
+          "2026-09-17T14:55:00Z"
+        ],
+        "rows_per_interval_min_median_max": [
+          27,
+          88.0,
+          95
+        ],
+        "final60_coverage_ok": 552,
+        "entry_window_coverage_ok": 552,
+        "book_any_interval": 549,
+        "token_labeled": 553,
+        "sane_entry_twap_intervals": 403,
+        "label_methods": {
+          "token_only": 184,
+          "cross_ok": 350,
+          "gamma_from_cross_disagree": 1,
+          "cross_disagree": 18,
+          "gamma_from_unresolved": 1
+        },
+        "needs_gamma_after_cache": 18,
+        "usable_for_wfo": 274
+      },
+      "SOL": {
+        "rows": 47736,
+        "intervals": 554,
+        "range": [
+          "2026-09-15T16:45:00Z",
+          "2026-09-17T14:55:00Z"
+        ],
+        "rows_per_interval_min_median_max": [
+          27,
+          88.0,
+          95
+        ],
+        "final60_coverage_ok": 552,
+        "entry_window_coverage_ok": 552,
+        "book_any_interval": 550,
+        "token_labeled": 552,
+        "sane_entry_twap_intervals": 448,
+        "label_methods": {
+          "gamma_from_cross_disagree": 2,
+          "cross_ok": 410,
+          "token_only": 130,
+          "cross_disagree": 10,
+          "gamma_from_unresolved": 2
+        },
+        "needs_gamma_after_cache": 10,
+        "usable_for_wfo": 297
+      },
+      "XRP": {
+        "rows": 47738,
+        "intervals": 554,
+        "range": [
+          "2026-09-15T16:45:00Z",
+          "2026-09-17T14:55:00Z"
+        ],
+        "rows_per_interval_min_median_max": [
+          27,
+          88.0,
+          95
+        ],
+        "final60_coverage_ok": 552,
+        "entry_window_coverage_ok": 552,
+        "book_any_interval": 550,
+        "token_labeled": 552,
+        "sane_entry_twap_intervals": 405,
+        "label_methods": {
+          "token_only": 145,
+          "cross_ok": 394,
+          "gamma_from_cross_disagree": 1,
+          "cross_disagree": 12,
+          "gamma_from_twap_only": 1,
+          "gamma_from_unresolved": 1
+        },
+        "needs_gamma_after_cache": 12,
+        "usable_for_wfo": 274
+      }
+    }
+  },
+  "wfo": {
+    "BTC": {
+      "asset": "BTC",
+      "n_intervals": 554,
+      "n_quality_labeled_intervals": 261,
+      "range": [
+        "2026-09-15T16:45:00Z",
+        "2026-09-17T14:55:00Z"
+      ],
+      "train_intervals": 144,
+      "test_intervals": 48,
+      "folds": [
+        {
+          "i": 0,
+          "train": [
+            "2026-09-15T16:45:00Z",
+            "2026-09-16T04:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T04:45:00Z",
+            "2026-09-16T08:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 104.4216,
+            "return_pct": 4.42,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 4.4216
+          },
+          "test_metrics": {
+            "final_capital": 103.4576,
+            "return_pct": 3.46,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 2,
+            "n_wins": 2,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 3.4576
+          }
+        },
+        {
+          "i": 1,
+          "train": [
+            "2026-09-15T20:45:00Z",
+            "2026-09-16T08:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T08:45:00Z",
+            "2026-09-16T12:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 10,
+            "stc_max": 35,
+            "min_dev_pct": 0.02,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 106.4732,
+            "return_pct": 6.47,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 6.4732
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 2,
+          "train": [
+            "2026-09-16T00:45:00Z",
+            "2026-09-16T12:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T12:45:00Z",
+            "2026-09-16T16:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.02,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 106.2854,
+            "return_pct": 6.29,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 6.2854
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 3,
+          "train": [
+            "2026-09-16T04:45:00Z",
+            "2026-09-16T16:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T16:45:00Z",
+            "2026-09-16T20:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.96,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 106.2687,
+            "return_pct": 6.27,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 5,
+            "n_wins": 5,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 6.2687
+          },
+          "test_metrics": {
+            "final_capital": 103.386,
+            "return_pct": 3.39,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 2,
+            "n_wins": 2,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 3.386
+          }
+        },
+        {
+          "i": 4,
+          "train": [
+            "2026-09-16T08:45:00Z",
+            "2026-09-16T20:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T20:45:00Z",
+            "2026-09-17T00:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 10,
+            "stc_max": 35,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.65,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 116.2552,
+            "return_pct": 16.26,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 16.2552
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 5,
+          "train": [
+            "2026-09-16T12:45:00Z",
+            "2026-09-17T00:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T00:45:00Z",
+            "2026-09-17T04:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 10,
+            "stc_max": 35,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.65,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 116.2552,
+            "return_pct": 16.26,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 16.2552
+          },
+          "test_metrics": {
+            "final_capital": 105.4401,
+            "return_pct": 5.44,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 5.4401
+          }
+        },
+        {
+          "i": 6,
+          "train": [
+            "2026-09-16T16:45:00Z",
+            "2026-09-17T04:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T04:45:00Z",
+            "2026-09-17T08:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 10,
+            "stc_max": 35,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.65,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 116.6817,
+            "return_pct": 16.68,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 16.6817
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 7,
+          "train": [
+            "2026-09-16T20:45:00Z",
+            "2026-09-17T08:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T08:45:00Z",
+            "2026-09-17T12:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 10,
+            "stc_max": 35,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 105.4401,
+            "return_pct": 5.44,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 5.4401
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        }
+      ],
+      "param_frequency": {
+        "stc_window": {
+          "2-60": 3,
+          "10-35": 5
+        },
+        "min_dev_pct": {
+          "0.015": 6,
+          "0.02": 2
+        },
+        "min_barrier_pct": {
+          "0.05": 8
+        },
+        "min_token_ask": {
+          "0.5": 5,
+          "0.65": 3
+        },
+        "max_token_ask": {
+          "0.94": 3,
+          "0.96": 1,
+          "0.9": 4
+        },
+        "full_book": {
+          "False": 8
+        }
+      },
+      "consensus_params": {
+        "stc_window": "10-35",
+        "min_dev_pct": "0.015",
+        "min_barrier_pct": "0.05",
+        "min_token_ask": "0.5",
+        "max_token_ask": "0.9",
+        "full_book": "False"
+      },
+      "oos": {
+        "start_capital": 100.0,
+        "final_capital": 112.2836,
+        "return_pct": 12.28,
+        "max_drawdown_pct": 0.0,
+        "n_trades": 5,
+        "n_wins": 5,
+        "n_losses": 0,
+        "win_rate": 1.0,
+        "pnl": 12.2836
+      },
+      "oos_trades": [
+        {
+          "slug": "btc-updown-5m-1789536600",
+          "interval_ts": 1789536600,
+          "entry_price": 0.88,
+          "shares": 22,
+          "pnl": 2.4774,
+          "won": true,
+          "capital_after": 102.4774,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.94] full=0"
+        },
+        {
+          "slug": "btc-updown-5m-1789538700",
+          "interval_ts": 1789538700,
+          "entry_price": 0.95,
+          "shares": 21,
+          "pnl": 0.9802,
+          "won": true,
+          "capital_after": 103.4576,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.94] full=0"
+        },
+        {
+          "slug": "btc-updown-5m-1789577700",
+          "interval_ts": 1789577700,
+          "entry_price": 0.87,
+          "shares": 22,
+          "pnl": 2.6858,
+          "won": true,
+          "capital_after": 106.1434,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.96] full=0"
+        },
+        {
+          "slug": "btc-updown-5m-1789590000",
+          "interval_ts": 1789590000,
+          "entry_price": 0.95,
+          "shares": 15,
+          "pnl": 0.7001,
+          "won": true,
+          "capital_after": 106.8435,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.96] full=0"
+        },
+        {
+          "slug": "btc-updown-5m-1789611000",
+          "interval_ts": 1789611000,
+          "entry_price": 0.77,
+          "shares": 25,
+          "pnl": 5.4401,
+          "won": true,
+          "capital_after": 112.2836,
+          "params": "T-10..35 dev≥0.015% B≥0.050% ask∈[0.65,0.90] full=0"
+        }
+      ]
+    },
+    "ETH": {
+      "asset": "ETH",
+      "n_intervals": 554,
+      "n_quality_labeled_intervals": 274,
+      "range": [
+        "2026-09-15T16:45:00Z",
+        "2026-09-17T14:55:00Z"
+      ],
+      "train_intervals": 144,
+      "test_intervals": 48,
+      "folds": [
+        {
+          "i": 0,
+          "train": [
+            "2026-09-15T16:45:00Z",
+            "2026-09-16T04:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T04:45:00Z",
+            "2026-09-16T08:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.55,
+            "max_token_ask": 0.92,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 113.2159,
+            "return_pct": 13.22,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 5,
+            "n_wins": 5,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 13.2159
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 1,
+          "train": [
+            "2026-09-15T20:45:00Z",
+            "2026-09-16T08:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T08:45:00Z",
+            "2026-09-16T12:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.96,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 105.4718,
+            "return_pct": 5.47,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 4,
+            "n_wins": 4,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 5.4718
+          },
+          "test_metrics": {
+            "final_capital": 103.9669,
+            "return_pct": 3.97,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 2,
+            "n_wins": 2,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 3.9669
+          }
+        },
+        {
+          "i": 2,
+          "train": [
+            "2026-09-16T00:45:00Z",
+            "2026-09-16T12:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T12:45:00Z",
+            "2026-09-16T16:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.96,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 105.6894,
+            "return_pct": 5.69,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 5.6894
+          },
+          "test_metrics": {
+            "final_capital": 106.1587,
+            "return_pct": 6.16,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 6.1587
+          }
+        },
+        {
+          "i": 3,
+          "train": [
+            "2026-09-16T04:45:00Z",
+            "2026-09-16T16:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T16:45:00Z",
+            "2026-09-16T20:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.96,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 110.3626,
+            "return_pct": 10.36,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 10.3626
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 4,
+          "train": [
+            "2026-09-16T08:45:00Z",
+            "2026-09-16T20:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T20:45:00Z",
+            "2026-09-17T00:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.96,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 110.3626,
+            "return_pct": 10.36,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 10.3626
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 5,
+          "train": [
+            "2026-09-16T12:45:00Z",
+            "2026-09-17T00:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T00:45:00Z",
+            "2026-09-17T04:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 106.1587,
+            "return_pct": 6.16,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 6.1587
+          },
+          "test_metrics": {
+            "final_capital": 105.908,
+            "return_pct": 5.91,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 5.908
+          }
+        },
+        {
+          "i": 6,
+          "train": [
+            "2026-09-16T16:45:00Z",
+            "2026-09-17T04:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T04:45:00Z",
+            "2026-09-17T08:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.96,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 106.4953,
+            "return_pct": 6.5,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 2,
+            "n_wins": 2,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 6.4953
+          },
+          "test_metrics": {
+            "final_capital": 102.6473,
+            "return_pct": 2.65,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 2,
+            "n_wins": 2,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 2.6473
+          }
+        },
+        {
+          "i": 7,
+          "train": [
+            "2026-09-16T20:45:00Z",
+            "2026-09-17T08:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T08:45:00Z",
+            "2026-09-17T12:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 115.8778,
+            "return_pct": 15.88,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 3,
+            "n_wins": 3,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 15.8778
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        }
+      ],
+      "param_frequency": {
+        "stc_window": {
+          "2-60": 8
+        },
+        "min_dev_pct": {
+          "0.015": 8
+        },
+        "min_barrier_pct": {
+          "0.05": 8
+        },
+        "min_token_ask": {
+          "0.55": 1,
+          "0.5": 7
+        },
+        "max_token_ask": {
+          "0.92": 1,
+          "0.96": 5,
+          "0.9": 2
+        },
+        "full_book": {
+          "False": 8
+        }
+      },
+      "consensus_params": {
+        "stc_window": "2-60",
+        "min_dev_pct": "0.015",
+        "min_barrier_pct": "0.05",
+        "min_token_ask": "0.5",
+        "max_token_ask": "0.96",
+        "full_book": "False"
+      },
+      "oos": {
+        "start_capital": 100.0,
+        "final_capital": 118.6811,
+        "return_pct": 18.68,
+        "max_drawdown_pct": 0.0,
+        "n_trades": 6,
+        "n_wins": 6,
+        "n_losses": 0,
+        "win_rate": 1.0,
+        "pnl": 18.6811
+      },
+      "oos_trades": [
+        {
+          "slug": "eth-updown-5m-1789560900",
+          "interval_ts": 1789560900,
+          "entry_price": 0.84,
+          "shares": 23,
+          "pnl": 3.4636,
+          "won": true,
+          "capital_after": 103.4636,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.96] full=0"
+        },
+        {
+          "slug": "eth-updown-5m-1789562400",
+          "interval_ts": 1789562400,
+          "entry_price": 0.97,
+          "shares": 18,
+          "pnl": 0.5033,
+          "won": true,
+          "capital_after": 103.9669,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.96] full=0"
+        },
+        {
+          "slug": "eth-updown-5m-1789568400",
+          "interval_ts": 1789568400,
+          "entry_price": 0.75,
+          "shares": 26,
+          "pnl": 6.1588,
+          "won": true,
+          "capital_after": 110.1257,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.96] full=0"
+        },
+        {
+          "slug": "eth-updown-5m-1789608900",
+          "interval_ts": 1789608900,
+          "entry_price": 0.76,
+          "shares": 26,
+          "pnl": 5.908,
+          "won": true,
+          "capital_after": 116.0337,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.90] full=0"
+        },
+        {
+          "slug": "eth-updown-5m-1789625400",
+          "interval_ts": 1789625400,
+          "entry_price": 0.95,
+          "shares": 17,
+          "pnl": 0.7935,
+          "won": true,
+          "capital_after": 116.8272,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.96] full=0"
+        },
+        {
+          "slug": "eth-updown-5m-1789629900",
+          "interval_ts": 1789629900,
+          "entry_price": 0.91,
+          "shares": 22,
+          "pnl": 1.8539,
+          "won": true,
+          "capital_after": 118.6811,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.96] full=0"
+        }
+      ]
+    },
+    "SOL": {
+      "asset": "SOL",
+      "n_intervals": 554,
+      "n_quality_labeled_intervals": 297,
+      "range": [
+        "2026-09-15T16:45:00Z",
+        "2026-09-17T14:55:00Z"
+      ],
+      "train_intervals": 144,
+      "test_intervals": 48,
+      "folds": [
+        {
+          "i": 0,
+          "train": [
+            "2026-09-15T16:45:00Z",
+            "2026-09-16T04:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T04:45:00Z",
+            "2026-09-16T08:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 12,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.6,
+            "max_token_ask": 0.96,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 100.9324,
+            "return_pct": 0.93,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 2,
+            "n_wins": 2,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 0.9324
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 1,
+          "train": [
+            "2026-09-15T20:45:00Z",
+            "2026-09-16T08:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T08:45:00Z",
+            "2026-09-16T12:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 10,
+            "stc_max": 35,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 100.9335,
+            "return_pct": 0.93,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 0.9335
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 4,
+          "train": [
+            "2026-09-16T08:45:00Z",
+            "2026-09-16T20:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T20:45:00Z",
+            "2026-09-17T00:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 101.1771,
+            "return_pct": 1.18,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 1.1771
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 5,
+          "train": [
+            "2026-09-16T12:45:00Z",
+            "2026-09-17T00:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T00:45:00Z",
+            "2026-09-17T04:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 101.1771,
+            "return_pct": 1.18,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 1.1771
+          },
+          "test_metrics": {
+            "final_capital": 101.1771,
+            "return_pct": 1.18,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 1.1771
+          }
+        },
+        {
+          "i": 6,
+          "train": [
+            "2026-09-16T16:45:00Z",
+            "2026-09-17T04:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T04:45:00Z",
+            "2026-09-17T08:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 102.3542,
+            "return_pct": 2.35,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 2,
+            "n_wins": 2,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 2.3542
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 7,
+          "train": [
+            "2026-09-16T20:45:00Z",
+            "2026-09-17T08:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T08:45:00Z",
+            "2026-09-17T12:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 101.1771,
+            "return_pct": 1.18,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 1,
+            "n_wins": 1,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 1.1771
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        }
+      ],
+      "param_frequency": {
+        "stc_window": {
+          "2-12": 1,
+          "10-35": 1,
+          "2-60": 4
+        },
+        "min_dev_pct": {
+          "0.015": 6
+        },
+        "min_barrier_pct": {
+          "0.05": 6
+        },
+        "min_token_ask": {
+          "0.6": 1,
+          "0.5": 5
+        },
+        "max_token_ask": {
+          "0.96": 1,
+          "0.94": 5
+        },
+        "full_book": {
+          "False": 6
+        }
+      },
+      "consensus_params": {
+        "stc_window": "2-60",
+        "min_dev_pct": "0.015",
+        "min_barrier_pct": "0.05",
+        "min_token_ask": "0.5",
+        "max_token_ask": "0.94",
+        "full_book": "False"
+      },
+      "oos": {
+        "start_capital": 100.0,
+        "final_capital": 101.1771,
+        "return_pct": 1.18,
+        "max_drawdown_pct": 0.0,
+        "n_trades": 1,
+        "n_wins": 1,
+        "n_losses": 0,
+        "win_rate": 1.0,
+        "pnl": 1.1771
+      },
+      "oos_trades": [
+        {
+          "slug": "sol-updown-5m-1789620000",
+          "interval_ts": 1789620000,
+          "entry_price": 0.9400000000000001,
+          "shares": 21,
+          "pnl": 1.1771,
+          "won": true,
+          "capital_after": 101.1771,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.50,0.94] full=0"
+        }
+      ]
+    },
+    "XRP": {
+      "asset": "XRP",
+      "n_intervals": 554,
+      "n_quality_labeled_intervals": 274,
+      "range": [
+        "2026-09-15T16:45:00Z",
+        "2026-09-17T14:55:00Z"
+      ],
+      "train_intervals": 144,
+      "test_intervals": 48,
+      "folds": [
+        {
+          "i": 0,
+          "train": [
+            "2026-09-15T16:45:00Z",
+            "2026-09-16T04:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T04:45:00Z",
+            "2026-09-16T08:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.05,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 112.9836,
+            "return_pct": 12.98,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 4,
+            "n_wins": 4,
+            "n_losses": 0,
+            "win_rate": 1.0,
+            "pnl": 12.9836
+          },
+          "test_metrics": {
+            "final_capital": 81.831,
+            "return_pct": -18.17,
+            "max_drawdown_pct": 19.59,
+            "n_trades": 2,
+            "n_wins": 1,
+            "n_losses": 1,
+            "win_rate": 0.5,
+            "pnl": -18.169
+          }
+        },
+        {
+          "i": 1,
+          "train": [
+            "2026-09-15T20:45:00Z",
+            "2026-09-16T08:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T08:45:00Z",
+            "2026-09-16T12:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 10,
+            "stc_max": 35,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 83.326,
+            "return_pct": -16.67,
+            "max_drawdown_pct": 19.31,
+            "n_trades": 4,
+            "n_wins": 3,
+            "n_losses": 1,
+            "win_rate": 0.75,
+            "pnl": -16.674
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 2,
+          "train": [
+            "2026-09-16T00:45:00Z",
+            "2026-09-16T12:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T12:45:00Z",
+            "2026-09-16T16:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 10,
+            "stc_max": 35,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 83.326,
+            "return_pct": -16.67,
+            "max_drawdown_pct": 19.31,
+            "n_trades": 4,
+            "n_wins": 3,
+            "n_losses": 1,
+            "win_rate": 0.75,
+            "pnl": -16.674
+          },
+          "test_metrics": {
+            "final_capital": 79.5763,
+            "return_pct": -20.42,
+            "max_drawdown_pct": 20.42,
+            "n_trades": 1,
+            "n_wins": 0,
+            "n_losses": 1,
+            "win_rate": 0.0,
+            "pnl": -20.4237
+          }
+        },
+        {
+          "i": 3,
+          "train": [
+            "2026-09-16T04:45:00Z",
+            "2026-09-16T16:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T16:45:00Z",
+            "2026-09-16T20:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.6,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 86.6836,
+            "return_pct": -13.32,
+            "max_drawdown_pct": 19.42,
+            "n_trades": 4,
+            "n_wins": 3,
+            "n_losses": 1,
+            "win_rate": 0.75,
+            "pnl": -13.3164
+          },
+          "test_metrics": {
+            "final_capital": 85.0406,
+            "return_pct": -14.96,
+            "max_drawdown_pct": 20.09,
+            "n_trades": 4,
+            "n_wins": 3,
+            "n_losses": 1,
+            "win_rate": 0.75,
+            "pnl": -14.9594
+          }
+        },
+        {
+          "i": 4,
+          "train": [
+            "2026-09-16T08:45:00Z",
+            "2026-09-16T20:45:00Z"
+          ],
+          "test": [
+            "2026-09-16T20:45:00Z",
+            "2026-09-17T00:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.6,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 89.4335,
+            "return_pct": -10.57,
+            "max_drawdown_pct": 19.88,
+            "n_trades": 5,
+            "n_wins": 4,
+            "n_losses": 1,
+            "win_rate": 0.8,
+            "pnl": -10.5665
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 5,
+          "train": [
+            "2026-09-16T12:45:00Z",
+            "2026-09-17T00:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T00:45:00Z",
+            "2026-09-17T04:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.6,
+            "max_token_ask": 0.9,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 89.4335,
+            "return_pct": -10.57,
+            "max_drawdown_pct": 19.88,
+            "n_trades": 5,
+            "n_wins": 4,
+            "n_losses": 1,
+            "win_rate": 0.8,
+            "pnl": -10.5665
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 6,
+          "train": [
+            "2026-09-16T16:45:00Z",
+            "2026-09-17T04:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T04:45:00Z",
+            "2026-09-17T08:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.05,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.96,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 85.6474,
+            "return_pct": -14.35,
+            "max_drawdown_pct": 20.09,
+            "n_trades": 6,
+            "n_wins": 5,
+            "n_losses": 1,
+            "win_rate": 0.8333,
+            "pnl": -14.3526
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        },
+        {
+          "i": 7,
+          "train": [
+            "2026-09-16T20:45:00Z",
+            "2026-09-17T08:45:00Z"
+          ],
+          "test": [
+            "2026-09-17T08:45:00Z",
+            "2026-09-17T12:45:00Z"
+          ],
+          "best_params": {
+            "stc_min": 2,
+            "stc_max": 60,
+            "min_dev_pct": 0.015,
+            "min_barrier_pct": 0.05,
+            "min_token_ask": 0.5,
+            "max_token_ask": 0.94,
+            "full_book": false
+          },
+          "train_metrics": {
+            "final_capital": 95.4275,
+            "return_pct": -4.57,
+            "max_drawdown_pct": 5.02,
+            "n_trades": 2,
+            "n_wins": 1,
+            "n_losses": 1,
+            "win_rate": 0.5,
+            "pnl": -4.5725
+          },
+          "test_metrics": {
+            "final_capital": 100.0,
+            "return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "n_trades": 0,
+            "n_wins": 0,
+            "n_losses": 0,
+            "win_rate": 0.0,
+            "pnl": 0.0
+          }
+        }
+      ],
+      "param_frequency": {
+        "stc_window": {
+          "2-60": 6,
+          "10-35": 2
+        },
+        "min_dev_pct": {
+          "0.05": 2,
+          "0.015": 6
+        },
+        "min_barrier_pct": {
+          "0.05": 8
+        },
+        "min_token_ask": {
+          "0.5": 5,
+          "0.6": 3
+        },
+        "max_token_ask": {
+          "0.9": 4,
+          "0.94": 3,
+          "0.96": 1
+        },
+        "full_book": {
+          "False": 8
+        }
+      },
+      "consensus_params": {
+        "stc_window": "2-60",
+        "min_dev_pct": "0.015",
+        "min_barrier_pct": "0.05",
+        "min_token_ask": "0.5",
+        "max_token_ask": "0.9",
+        "full_book": "False"
+      },
+      "oos": {
+        "start_capital": 100.0,
+        "final_capital": 46.4479,
+        "return_pct": -53.55,
+        "max_drawdown_pct": 57.46,
+        "n_trades": 7,
+        "n_wins": 4,
+        "n_losses": 3,
+        "win_rate": 0.5714,
+        "pnl": -53.5521
+      },
+      "oos_trades": [
+        {
+          "slug": "xrp-updown-5m-1789546500",
+          "interval_ts": 1789546500,
+          "entry_price": 0.91,
+          "shares": 21,
+          "pnl": 1.7696,
+          "won": true,
+          "capital_after": 101.7696,
+          "params": "T-2..60 dev≥0.050% B≥0.050% ask∈[0.50,0.90] full=0"
+        },
+        {
+          "slug": "xrp-updown-5m-1789548000",
+          "interval_ts": 1789548000,
+          "entry_price": 0.9,
+          "shares": 22,
+          "pnl": -19.9386,
+          "won": false,
+          "capital_after": 81.831,
+          "params": "T-2..60 dev≥0.050% B≥0.050% ask∈[0.50,0.90] full=0"
+        },
+        {
+          "slug": "xrp-updown-5m-1789574100",
+          "interval_ts": 1789574100,
+          "entry_price": 0.55,
+          "shares": 36,
+          "pnl": -20.4237,
+          "won": false,
+          "capital_after": 61.4073,
+          "params": "T-10..35 dev≥0.015% B≥0.050% ask∈[0.50,0.94] full=0"
+        },
+        {
+          "slug": "xrp-updown-5m-1789579200",
+          "interval_ts": 1789579200,
+          "entry_price": 0.88,
+          "shares": 22,
+          "pnl": 2.4774,
+          "won": true,
+          "capital_after": 63.8847,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.60,0.90] full=0"
+        },
+        {
+          "slug": "xrp-updown-5m-1789583100",
+          "interval_ts": 1789583100,
+          "entry_price": 0.78,
+          "shares": 26,
+          "pnl": -20.5923,
+          "won": false,
+          "capital_after": 43.2924,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.60,0.90] full=0"
+        },
+        {
+          "slug": "xrp-updown-5m-1789585800",
+          "interval_ts": 1789585800,
+          "entry_price": 0.85,
+          "shares": 8,
+          "pnl": 1.1286,
+          "won": true,
+          "capital_after": 44.421,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.60,0.90] full=0"
+        },
+        {
+          "slug": "xrp-updown-5m-1789591200",
+          "interval_ts": 1789591200,
+          "entry_price": 0.88,
+          "shares": 18,
+          "pnl": 2.0269,
+          "won": true,
+          "capital_after": 46.4479,
+          "params": "T-2..60 dev≥0.015% B≥0.050% ask∈[0.60,0.90] full=0"
+        }
+      ]
+    }
+  },
+  "gamma_needed_slugs": [
+    "btc-updown-5m-1789508100",
+    "btc-updown-5m-1789511700",
+    "btc-updown-5m-1789517100",
+    "btc-updown-5m-1789517400",
+    "btc-updown-5m-1789518600",
+    "btc-updown-5m-1789521900",
+    "btc-updown-5m-1789529400",
+    "btc-updown-5m-1789543200",
+    "btc-updown-5m-1789546200",
+    "btc-updown-5m-1789557000",
+    "btc-updown-5m-1789575000",
+    "btc-updown-5m-1789590600",
+    "btc-updown-5m-1789647600",
+    "eth-updown-5m-1789505400",
+    "eth-updown-5m-1789506900",
+    "eth-updown-5m-1789518000",
+    "eth-updown-5m-1789520700",
+    "eth-updown-5m-1789557000",
+    "eth-updown-5m-1789563900",
+    "eth-updown-5m-1789567500",
+    "eth-updown-5m-1789571400",
+    "eth-updown-5m-1789588800",
+    "eth-updown-5m-1789593300",
+    "eth-updown-5m-1789605300",
+    "eth-updown-5m-1789607400",
+    "eth-updown-5m-1789611000",
+    "eth-updown-5m-1789619100",
+    "eth-updown-5m-1789619700",
+    "eth-updown-5m-1789621200",
+    "eth-updown-5m-1789629600",
+    "eth-updown-5m-1789639800",
+    "sol-updown-5m-1789524300",
+    "sol-updown-5m-1789580400",
+    "sol-updown-5m-1789582500",
+    "sol-updown-5m-1789583100",
+    "sol-updown-5m-1789587300",
+    "sol-updown-5m-1789609800",
+    "sol-updown-5m-1789611000",
+    "sol-updown-5m-1789617600",
+    "sol-updown-5m-1789618200",
+    "sol-updown-5m-1789641600",
+    "xrp-updown-5m-1789506900",
+    "xrp-updown-5m-1789514100",
+    "xrp-updown-5m-1789546200",
+    "xrp-updown-5m-1789547400",
+    "xrp-updown-5m-1789555500",
+    "xrp-updown-5m-1789563300",
+    "xrp-updown-5m-1789579500",
+    "xrp-updown-5m-1789584900",
+    "xrp-updown-5m-1789587300",
+    "xrp-updown-5m-1789588200",
+    "xrp-updown-5m-1789589700",
+    "xrp-updown-5m-1789609200"
+  ]
+}

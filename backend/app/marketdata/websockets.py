@@ -23,6 +23,7 @@ import asyncio
 import json
 import random
 import time
+from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Set, Tuple
 
 import websockets
@@ -47,10 +48,10 @@ SUBSCRIPTION_TTL_SECS = 900
 # Polymarket RTDS and Market channels push updates on-event. During low volatility,
 # Chainlink heartbeats on Polygon fire every 20-60 seconds, and quiet token orderbooks
 # can have no price updates for 30-60 seconds without being dead.
-# Setting thresholds to 120s / 90s prevents false-alarm reconnect spam while still
-# catching actual frozen TCP connections.
+# RTDS keeps a 90s watchdog; market-book WS uses 45s to avoid reconnecting every
+# quiet 5-minute lull while still catching truly frozen connections.
 DEAD_STREAM_RTDS_SECS = 90.0
-DEAD_STREAM_MARKET_SECS = 10.0
+DEAD_STREAM_MARKET_SECS = 45.0
 
 
 def _ws_is_open(ws) -> bool:
@@ -122,9 +123,16 @@ class WebSocketManager:
     # ── lifecycle ────────────────────────────────────────────────────────
 
     def start(self) -> None:
+        rtds_assets = self._active_assets()
+        rtds_tasks = (
+            [asyncio.create_task(self._run_rtds([asset]), name=f"ws-rtds-{asset.lower()}")
+             for asset in rtds_assets]
+            if getattr(self.s, "rtds_split_by_asset", True)
+            else [asyncio.create_task(self._run_rtds(rtds_assets), name="ws-rtds")]
+        )
         self._tasks = [
             asyncio.create_task(self._run_binance_direct(), name="ws-binance-direct"),
-            asyncio.create_task(self._run_rtds(), name="ws-rtds"),
+            *rtds_tasks,
             asyncio.create_task(self._run_market(), name="ws-market"),
             asyncio.create_task(self._run_user(), name="ws-user"),
         ]
@@ -186,18 +194,78 @@ class WebSocketManager:
 
     # ── Polymarket RTDS (Chainlink + Binance) ────────────────────────────
 
-    async def _run_rtds(self) -> None:
-        subs = [
-            {"topic": "crypto_prices_chainlink", "type": "*", "filters": ""},
-            {"topic": "crypto_prices", "type": "*", "filters": ""},
-        ]
-        # Official Chainlink TWAP (authoritative resolution feed). filters=""
-        # subscribes to every symbol; we filter by payload.symbol below.
+    @staticmethod
+    def _compact_symbol_filter(symbol: str) -> str:
+        """RTDS requires Chainlink filters as a compact JSON *string*."""
+        return json.dumps({"symbol": symbol}, separators=(",", ":"))
+
+    def _active_assets(self) -> List[str]:
+        return [str(a).upper() for a in getattr(self.s, "assets", []) if str(a).strip()]
+
+    def _build_rtds_subscriptions(self, assets: Optional[List[str]] = None) -> List[dict]:
+        """Build a small, asset-filtered RTDS subscription set.
+
+        The previous wildcard batch subscribed to all symbols and to both TWAP
+        windows plus a legacy topic. On multi-asset runs that can silently fail
+        or produce long quiet periods. Keep it explicit: current assets only,
+        correct `type` values, compact string filters, and only the configured
+        TWAP window for settlement. `start()` runs this per asset by default to
+        reproduce the stable BTC-only shape and isolate one asset's stall from
+        the rest.
+        """
+        assets = [str(a).upper() for a in (assets or self._active_assets()) if str(a).strip()]
+        subs: List[dict] = []
+
+        # Binance RTDS is a backup for the dedicated Binance-direct socket.
+        # The documented filter is one comma-separated lowercase symbol list.
+        if getattr(self.s, "rtds_binance_enabled", True):
+            bsyms = []
+            for asset in assets:
+                sym = self.s.binance_symbols_ws.get(asset)
+                if sym:
+                    bsyms.append(sym.lower())
+            if bsyms:
+                subs.append({
+                    "topic": "crypto_prices",
+                    "type": "update",
+                    "filters": ",".join(dict.fromkeys(bsyms)),
+                })
+
+        # Chainlink spot uses slash-separated symbols and JSON-string filters.
+        for asset in assets:
+            sym = self.s.chainlink_symbols.get(asset)
+            if not sym:
+                continue
+            subs.append({
+                "topic": "crypto_prices_chainlink",
+                "type": "*",
+                "filters": self._compact_symbol_filter(sym.lower()),
+            })
+
+        # 5-minute crypto up/down markets currently use a single configured TWAP
+        # window. Subscribing to 30s and 60s together lets one overwrite the
+        # other in LivePriceStore, so request only the selected window.
         if self.s.chainlink_twap_enabled:
-            subs.append({"topic": "crypto_prices_twap_thirty", "type": "*", "filters": ""})         
-            subs.append({"topic": "crypto_prices_twap_sixty", "type": "*", "filters": ""})
-            subs.append({"topic": "crypto_prices_twap", "type": "*", "filters": ""})
-        sub = json.dumps({"action": "subscribe", "subscriptions": subs})
+            window = int(getattr(self.s, "chainlink_twap_window", 60) or 60)
+            topic = {
+                30: "crypto_prices_twap_thirty",
+                60: "crypto_prices_twap_sixty",
+            }.get(window, "crypto_prices_twap_sixty")
+            for asset in assets:
+                sym = self.s.chainlink_symbols.get(asset)
+                if not sym:
+                    continue
+                subs.append({
+                    "topic": topic,
+                    "type": "update",
+                    "filters": self._compact_symbol_filter(sym.lower()),
+                })
+        return subs
+
+    async def _run_rtds(self, assets: Optional[List[str]] = None) -> None:
+        assets = [str(a).upper() for a in (assets or self._active_assets()) if str(a).strip()]
+        subs = self._build_rtds_subscriptions(assets)
+        sub = json.dumps({"action": "subscribe", "subscriptions": subs}, separators=(",", ":"))
         attempt = 0
      
         while True:
@@ -207,7 +275,12 @@ class WebSocketManager:
                     self.s.ws_rtds_url, ping_interval=20, ping_timeout=20
                 ) as ws:
                     await ws.send(sub)
-                    self.log.info("[WS-RTDS] Connected")
+                    self.log.info(
+                        "[WS-RTDS] Connected",
+                        assets=assets,
+                        subscriptions=len(subs),
+                        twap_window=getattr(self.s, "chainlink_twap_window", 60),
+                    )
                     attempt = 0
                     last_msg = time.time()
 
@@ -270,6 +343,21 @@ class WebSocketManager:
         elif isinstance(msg, dict):
             self._process_single_rtds(msg)
 
+    @staticmethod
+    def _rtds_decimal_value(payload: dict) -> Optional[float]:
+        val = (payload.get("value") if payload.get("value") is not None
+               else (payload.get("price") if payload.get("price") is not None
+                     else payload.get("p")))
+        if val is not None:
+            return float(val)
+        fav = payload.get("full_accuracy_value")
+        if fav is not None:
+            try:
+                return float(Decimal(str(fav)) / Decimal("1000000000000000000"))
+            except (InvalidOperation, ValueError, TypeError):
+                return None
+        return None
+
     def _process_single_rtds(self, msg: dict) -> None:
         topic = msg.get("topic", "")
         payload = msg.get("payload")
@@ -278,19 +366,25 @@ class WebSocketManager:
 
         sym = payload.get("symbol") or payload.get("s") or ""
         asset = normalize_asset(sym)
-        val = (payload.get("value") if payload.get("value") is not None
-               else (payload.get("price") if payload.get("price") is not None
-                     else payload.get("p")))
+        val = self._rtds_decimal_value(payload)
         oracle_ts = (payload.get("timestamp") or payload.get("ts")
                      or payload.get("time") or payload.get("T"))
 
         if "twap" in topic:
+            window = (payload.get("window_s") or payload.get("windowSeconds")
+                      or payload.get("window_seconds"))
+            configured_window = int(getattr(self.s, "chainlink_twap_window", 60) or 60)
+            try:
+                if window is not None and int(float(window)) != configured_window:
+                    return
+            except (TypeError, ValueError):
+                pass
             if val is not None and asset:
                 if not getattr(self, "_twap_logged", False):
                     self._twap_logged = True
                     self.log.info("[WS-RTDS] first TWAP message received",
                                   topic=topic, symbol=sym, asset=asset,
-                                  payload_keys=list(payload.keys()), payload=payload)
+                                  window=window, payload_keys=list(payload.keys()), payload=payload)
                 try:
                     ots = int(float(oracle_ts)) if oracle_ts is not None else None
                     self.prices.update_chainlink_twap(asset, float(val), ots)
@@ -317,6 +411,7 @@ class WebSocketManager:
     async def _run_market(self) -> None:
         attempt = 0
         while True:
+            heartbeat_task = None
             try:
                 async with websockets.connect(
                     self.s.ws_market_url, ping_interval=20, ping_timeout=20
@@ -330,6 +425,21 @@ class WebSocketManager:
                         await self._send_subscription(ws, active)
                         self.log.info("[WS-MARKET] Re-subscribed to active tokens",
                                       tokens=len(active))
+
+                    # Polymarket's examples use text PING/PONG in addition to
+                    # protocol pings; keep it active so idle sockets do not get
+                    # mistaken for dead during quiet order-book periods.
+                    async def _market_pinger():
+                        while _ws_is_open(ws):
+                            try:
+                                await asyncio.sleep(float(self.s.ws_heartbeat_interval))
+                                if _ws_is_open(ws):
+                                    await ws.send("PING")
+                            except (asyncio.CancelledError, Exception):
+                                break
+
+                    heartbeat_task = asyncio.create_task(_market_pinger())
+
                     # ── Dead-stream detection ─────────────────────────────
                     last_msg = time.time()
                     while True:
@@ -370,13 +480,22 @@ class WebSocketManager:
                 delay = _backoff_delay(attempt, base=self.s.ws_reconnect_delay)
                 self.log.error(f"[WS-MARKET] Error ({e}), reconnecting in {delay:.1f}s")
                 await asyncio.sleep(delay)
+            finally:
+                if heartbeat_task and not heartbeat_task.done():
+                    heartbeat_task.cancel()
 
     def _process_market_msg(self, msg: dict) -> None:
-        et = msg.get("event_type", "")
+        # Accept both the legacy raw CLOB shape
+        #   {event_type, asset_id, price_changes, best_ask}
+        # and the current SDK/documented shape
+        #   {topic, type, payload: {tokenId, priceChanges, bestAsk}}.
+        payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else msg
+        et = msg.get("event_type") or msg.get("type") or ""
         if et == "book":
-            aid = msg.get("asset_id", "")
-            bids = msg.get("bids", [])
-            asks = msg.get("asks", [])
+            aid = (payload.get("asset_id") or payload.get("token_id")
+                   or payload.get("assetId") or payload.get("tokenId") or "")
+            bids = payload.get("bids", [])
+            asks = payload.get("asks", [])
             if aid and isinstance(bids, list) and isinstance(asks, list):
                 nb = [{"price": b.get("price", "0"), "size": b.get("size", "0")}
                       for b in bids if isinstance(b, dict)]
@@ -384,19 +503,24 @@ class WebSocketManager:
                       for a in asks if isinstance(a, dict)]
                 self.prices.update_full_book(aid, nb, na)
         elif et == "price_change":
-            self._apply_bba(msg)
-            for pc in msg.get("price_changes", []):
+            self._apply_bba(payload)
+            for pc in (payload.get("price_changes") or payload.get("priceChanges") or []):
                 if isinstance(pc, dict):
                     self._apply_bba(pc)
-        elif et in ("best_bid_ask", "last_trade_price"):
-            self._apply_bba(msg)
+        elif et == "best_bid_ask":
+            self._apply_bba(payload)
+        elif et == "last_trade_price":
+            # A trade price is not an executable ask. Do not overwrite
+            # lot_prices with it; strategies use lot_prices as best-ask fallback.
+            return
 
     def _apply_bba(self, msg: dict) -> None:
-        aid = msg.get("asset_id", "")
+        aid = (msg.get("asset_id") or msg.get("token_id")
+               or msg.get("assetId") or msg.get("tokenId") or "")
         if not aid:
             return
-        ba = msg.get("best_ask")
-        bb = msg.get("best_bid")
+        ba = msg.get("best_ask") if msg.get("best_ask") is not None else msg.get("bestAsk")
+        bb = msg.get("best_bid") if msg.get("best_bid") is not None else msg.get("bestBid")
         p = msg.get("price")
         ask = ba if ba is not None else p
         try:
@@ -406,21 +530,27 @@ class WebSocketManager:
         except (ValueError, TypeError):
             pass
 
-    async def _send_subscription(self, ws, token_ids: Set[str]) -> bool:
-        """Low-level send. Batches in chunks of up to 50 tokens to prevent payload drops."""
+    async def _send_subscription(self, ws, token_ids: Set[str], operation: Optional[str] = None) -> bool:
+        """Low-level send. Batches in chunks of up to 50 tokens to prevent payload drops.
+
+        Initial subscriptions use the documented {type, assets_ids} payload.
+        Dynamic changes on an already-open socket additionally include
+        operation=subscribe/unsubscribe, matching the market-channel protocol.
+        """
         if not token_ids:
             return True
         token_list = list(token_ids)
         chunk_size = 50
-        all_ok = True
         try:
             for i in range(0, len(token_list), chunk_size):
                 chunk = token_list[i:i + chunk_size]
-                payload = json.dumps({
+                msg = {
                     "assets_ids": chunk, "type": "market",
                     "custom_feature_enabled": True,
-                })
-                await ws.send(payload)
+                }
+                if operation:
+                    msg["operation"] = operation
+                await ws.send(json.dumps(msg))
             return True
         except Exception:
             return False
@@ -459,7 +589,7 @@ class WebSocketManager:
                 # Only send the NEW tokens (not all active), to keep payload small
                 new_tokens = token_ids & active
                 if new_tokens:
-                    success = await self._send_subscription(self._market_ws, new_tokens)
+                    success = await self._send_subscription(self._market_ws, new_tokens, operation="subscribe")
                     if success:
                         self.log.info("[WS-MARKET] Subscribed", tokens=len(new_tokens))
                     else:

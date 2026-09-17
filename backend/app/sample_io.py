@@ -83,6 +83,22 @@ def load_samples(path) -> Dict[str, List[dict]]:
                 slug = rec.get("slug")
                 if slug:
                     by[slug].append(rec)
+        elif "\t" in first:
+            # Headerless TSV chunk. Some operational logs are split into parts
+            # by byte size; only part01 keeps the '# ...' header, while later
+            # chunks start directly with data rows. Use the canonical FIELDS
+            # order so each chunk remains independently readable.
+            header = FIELDS
+            for line in [first, *f]:
+                line = line.rstrip("\r\n")
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                rec = {header[i]: _conv(header[i], parts[i])
+                       for i in range(min(len(header), len(parts)))}
+                slug = rec.get("slug")
+                if slug:
+                    by[slug].append(rec)
         else:
             # legacy JSONL
             for raw in [first, *f]:

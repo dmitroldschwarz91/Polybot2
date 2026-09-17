@@ -93,6 +93,25 @@ class TWAPInertiaStrategy(BaseStrategy):
         if not cur_twap or not twap_open or twap_open <= 0:
             return Opportunity(can_enter=False, reason="missing_twap_reference")
 
+        # Feed-decoder sanity guard. Demo logs showed occasional official TWAP
+        # values from a wrong scale/symbol (e.g. BTC spot 76k vs TWAP 23k/338),
+        # which creates fake barrier locks. A 2% band is very wide for a 60s
+        # crypto TWAP, but reliably rejects those pathologies.
+        sanity = getattr(s, "twap_sanity_max_rel_diff", 0.02)
+        cur_spot = prices.get_oracle_price(asset, max_age=max_age)
+        spot_open = (market_data.start_prices.get(str(cur_interval), {}).get(asset)
+                     or market.get("target_price"))
+        if sanity and cur_spot and cur_spot > 0:
+            rel = abs(cur_twap / cur_spot - 1.0)
+            if rel > sanity:
+                return Opportunity(can_enter=False, reason="twap_sanity_failed",
+                                   extra={"twap": cur_twap, "spot": cur_spot, "rel_diff": round(rel, 4), "max_rel_diff": sanity})
+        if sanity and spot_open and spot_open > 0:
+            rel = abs(twap_open / spot_open - 1.0)
+            if rel > sanity:
+                return Opportunity(can_enter=False, reason="twap_open_sanity_failed",
+                                   extra={"twap_open": twap_open, "spot_open": spot_open, "rel_diff": round(rel, 4), "max_rel_diff": sanity})
+
         dev_twap_pct = (cur_twap - twap_open) / twap_open * 100.0
         abs_dev = abs(dev_twap_pct)
 

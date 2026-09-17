@@ -524,6 +524,8 @@ async function loadConfig(){
     if(dcfg.assets) setSelectedAssets('demoAsset', dcfg.assets);
     if(dcfg.strategy && $('demoStrategy')) $('demoStrategy').value = dcfg.strategy;
     if(dcfg.start_capital && $('demoCapital')) $('demoCapital').value = dcfg.start_capital;
+    if(dcfg.threshold !== undefined && $('demoThreshold')) $('demoThreshold').value = dcfg.threshold;
+    if(dcfg.stake_ratio !== undefined && $('demoStake')) $('demoStake').value = dcfg.stake_ratio;
   } catch(_){}
 }
 

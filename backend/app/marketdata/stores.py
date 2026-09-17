@@ -18,10 +18,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 
 # Downsample interval for the range5 filter's price history. Binance aggTrade
-# fires dozens of times/sec, so the maxlen=600 binance_direct deque covers only
-# ~30s — too short for a 5-min range. We keep one point every RANGE_SAMPLE_SECS
-# in a separate deque (range_history) -> maxlen=120 covers ~10 min.
+# fires dozens of times/sec, so the maxlen=600 binance_direct deque can cover
+# far less than one minute on BTC/ETH. We keep lower-frequency histories for
+# calculations that need time coverage rather than every single trade tick.
 RANGE_SAMPLE_SECS = 5.0
+TWAP_SAMPLE_SECS = 1.0
 
 
 def compute_time_weighted_twap(
@@ -140,6 +141,13 @@ class LivePriceStore:
         # short at maxlen=600). Populated in update_binance_direct.
         self.range_history: Dict[str, Deque] = {a: deque(maxlen=120) for a in assets}
 
+        # Downsampled history used specifically for fallback TWAP reconstruction.
+        # The dense aggTrade deque can be only a few seconds wide on BTC/ETH, so
+        # using it directly creates under-covered TWAP values (e.g. 0.2 * spot).
+        # One point per second is plenty for a 60s TWAP and maxlen=300 covers
+        # multiple reconnect gaps without material memory/CPU cost.
+        self.twap_reconstruction_history: Dict[str, Deque] = {a: deque(maxlen=300) for a in assets}
+
         # VWAP accumulators (BTC oracle): sum(price*qty) and sum(qty), reset at
         # the start of each 5-min interval. Populated from Binance aggTrade volume.
         self.vwap_num: Dict[str, float] = {a: 0.0 for a in assets}
@@ -168,6 +176,8 @@ class LivePriceStore:
                 self.binance_direct_history[a] = deque(maxlen=600)
             if a not in self.range_history:
                 self.range_history[a] = deque(maxlen=120)
+            if a not in self.twap_reconstruction_history:
+                self.twap_reconstruction_history[a] = deque(maxlen=300)
             if a not in self.vwap_num:
                 self.vwap_num[a] = 0.0
                 self.vwap_den[a] = 0.0
@@ -207,20 +217,21 @@ class LivePriceStore:
 
     def get_reconstructed_twap(self, asset: str, window_secs: float = 60.0,
                                end_time: Optional[float] = None) -> Tuple[Optional[float], float]:
-        """Reconstruct time-weighted TWAP and coverage from oracle tick history over [end_time - window_secs, end_time].
-        Dynamically selects the freshest active stream (Chainlink, Binance direct, or Binance RTDS)."""
+        """Reconstruct time-weighted TWAP and coverage over [end-window, end].
+
+        Prefer the candidate with the best time coverage, then the freshest tick.
+        This is deliberate: the dense Binance aggTrade deque can hold only a few
+        seconds of BTC/ETH trades, so choosing the "freshest" history blindly can
+        produce under-scaled TWAPs such as 0.2 * spot. The downsampled 1s direct
+        history preserves enough time span for 60s reconstruction.
+        """
         now = end_time if end_time is not None else time.time()
         cutoff = now - window_secs
 
-        candidates = []
-        for name, hist in [
-            ("chainlink", self.chainlink_history.get(asset)),
-            ("binance_direct", self.binance_direct_history.get(asset)),
-            ("binance", self.binance_history.get(asset)),
-        ]:
+        def _normalise_ticks(hist) -> List[Tuple[float, float]]:
+            ticks: List[Tuple[float, float]] = []
             if not hist:
-                continue
-            ticks = []
+                return ticks
             for item in hist:
                 if len(item) == 3:
                     raw_ts, local_ts, price = item
@@ -233,20 +244,32 @@ class LivePriceStore:
                 else:
                     continue
                 if price is not None and price > 0:
-                    ticks.append((ts_sec, price))
-            if ticks:
-                # Store latest tick timestamp and ticks
-                latest_ts = ticks[-1][0]
-                candidates.append((latest_ts, ticks))
+                    ticks.append((float(ts_sec), float(price)))
+            return ticks
+
+        candidates = []
+        for name, hist in [
+            ("chainlink", self.chainlink_history.get(asset)),
+            ("binance_direct_twap", self.twap_reconstruction_history.get(asset)),
+            ("binance_direct_range", self.range_history.get(asset)),
+            ("binance_direct_dense", self.binance_direct_history.get(asset)),
+            ("binance_rtds", self.binance_history.get(asset)),
+        ]:
+            ticks = _normalise_ticks(hist)
+            if not ticks:
+                continue
+            twap, coverage = compute_time_weighted_twap(ticks, cutoff, now)
+            if twap is None:
+                continue
+            latest_ts = max(t for t, _ in ticks)
+            candidates.append((coverage, latest_ts, twap, name))
 
         if not candidates:
             return None, 0.0
 
-        # Sort candidates so the feed with the most recent tick is preferred
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        best_ticks = candidates[0][1]
-
-        return compute_time_weighted_twap(best_ticks, cutoff, now)
+        candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        best_coverage, _, best_twap, _ = candidates[0]
+        return best_twap, best_coverage
 
     def get_chainlink_twap(self, asset: str, max_age: float = 120.0, window_secs: float = 60.0) -> Optional[float]:
         """Latest TWAP value (official stream if available, otherwise reconstructed from tick history)."""
@@ -297,6 +320,16 @@ class LivePriceStore:
         rh = self.range_history[asset]
         if not rh or (now - rh[-1][0]) >= RANGE_SAMPLE_SECS:
             rh.append((now, price))
+
+        # downsampled point for fallback 60s TWAP reconstruction. This avoids
+        # using the dense maxlen=600 aggTrade deque directly on high-volume
+        # symbols, where 600 trades may represent only a few seconds of history.
+        if asset not in self.twap_reconstruction_history:
+            self.twap_reconstruction_history[asset] = deque(maxlen=300)
+        th = self.twap_reconstruction_history[asset]
+        if not th or (now - th[-1][0]) >= TWAP_SAMPLE_SECS:
+            th.append((now, price))
+
         # VWAP accumulation (BTC, from Binance aggTrade volume)
         if qty is not None and qty > 0:
             self.vwap_num[asset] = self.vwap_num.get(asset, 0.0) + price * qty
