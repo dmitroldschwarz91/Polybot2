@@ -233,6 +233,16 @@ class Settings(BaseSettings):
     demo_sample_interval_secs_active: float = 1.0
     demo_sample_interval_secs: float = 1.0
 
+    # ── Full-depth order-book recorder (SEPARATE high-volume log) ──────────
+    # Records the whole bid/ask ladder (not just best-level) into its own file
+    # `demo_book_depth.jsonl`, for maker / spread-capture microstructure research.
+    # This is a firehose, so it is OFF by default and heavily throttled/gated.
+    demo_book_depth_enabled: bool = False
+    demo_book_depth_max_levels: int = 10          # ladder depth stored per side
+    demo_book_depth_min_interval_secs: float = 1.0  # per-token throttle
+    # Only record within N secs of close (where maker fills matter); None = whole interval.
+    demo_book_depth_only_near_close_secs: float = 120.0
+
     dashboard_host: str = "0.0.0.0"
     dashboard_port: int = 8000
     dashboard_password: str = ""

@@ -5,6 +5,8 @@ __pycache__/
 logs/*.log
 logs/*.tsv
 logs/*.csv
+# Full-depth order-book recorder — high-volume firehose, keep out of git.
+logs/demo_book_depth*.jsonl
 .env
 .venv
 env/

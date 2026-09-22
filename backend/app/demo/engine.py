@@ -42,6 +42,7 @@ from ..domain.resolution import (
 from ..marketdata.stores import LivePriceStore, OrderBook
 from ..marketdata.websockets import WebSocketManager
 from ..marketdata.book_poller import BookPoller
+from ..marketdata.book_recorder import BookDepthRecorder
 from ..risk.manager import RiskManager
 from ..strategies.vacuum_scalp import VacuumScalpStrategy
 from ..strategies.simple_entry import SimpleEntryStrategy
@@ -296,6 +297,21 @@ class DemoEngine:
         self._last_reject_log = {}  # throttle dict
         self._last_sample_ts = {}   # interval-sampler throttle dict
 
+        # ── SEPARATE full-depth order-book recorder (own high-volume file) ──
+        # Captures the WHOLE bid/ask ladder per book update for maker /
+        # spread-capture research — kept out of the interval-samples file so it
+        # can be rotated/archived independently and never bloats strategy logs.
+        self.book_depth_path = Path(settings.log_dir) / "demo_book_depth.jsonl"
+        self.book_depth = BookDepthRecorder(
+            self.book_depth_path,
+            max_levels=getattr(self.s, "demo_book_depth_max_levels", 10),
+            min_interval_secs=getattr(self.s, "demo_book_depth_min_interval_secs", 1.0),
+            only_near_close_secs=getattr(self.s, "demo_book_depth_only_near_close_secs", None),
+            enabled=bool(getattr(self.s, "demo_book_depth_enabled", False)),
+        )
+        # token_id -> {"asset","slug","side_of","end_ts"} for depth-recorder enrichment
+        self._token_meta: Dict[str, dict] = {}
+
     # ── lifecycle ────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -332,6 +348,17 @@ class DemoEngine:
         self.log.info("=" * 60)
 
         await self.http.session()  # init async HTTP
+        # Full-depth recorder: hook the price store's book-update listener so
+        # every ladder update for a watched token is captured (event-driven).
+        if self.book_depth.enabled:
+            self.book_depth.start()
+            self.prices.add_book_listener(self.book_depth.on_book)
+            self.log.info(
+                "[DEMO] Book-depth recorder ON",
+                path=str(self.book_depth_path),
+                max_levels=self.book_depth.max_levels,
+                near_close_secs=self.book_depth.only_near_close_secs,
+            )
         self.ws.start()
         self.book_poller.start()
         self.status.running = True
@@ -351,6 +378,10 @@ class DemoEngine:
         await self.book_poller.stop()
         await self.ws.stop()
         await self.http.close()
+        if self.book_depth.enabled:
+            await self.book_depth.stop()
+            self.log.info("[DEMO] Book-depth recorder stopped",
+                          rows_written=self.book_depth.written)
         self.status.running = False
         self.log.info("Demo engine stopped.")
 
@@ -400,6 +431,10 @@ class DemoEngine:
                 if self.known_tokens:
                     self.book_poller.unwatch(self.known_tokens)
                     self.prices.cleanup_old_tokens(self.known_tokens)
+                    if self.book_depth.enabled:
+                        self.book_depth.unwatch(self.known_tokens)
+                        for _tid in self.known_tokens:
+                            self._token_meta.pop(_tid, None)
                     self.known_tokens.clear()
                 # Prune _last_reject_log (keep only last 20 entries)
                 if len(self._last_reject_log) > 20:
@@ -427,10 +462,21 @@ class DemoEngine:
         new_tokens = set()
         for m in markets:
             if m:
-                for tid in (m.get("up_token_id"), m.get("down_token_id")):
+                _slug = m.get("slug", "")
+                _asset = m.get("asset", "?")
+                _end = m.get("end_ts")
+                for tid, side in ((m.get("up_token_id"), "UP"), (m.get("down_token_id"), "DOWN")):
                     if tid and tid not in self.known_tokens:
                         new_tokens.add(tid)
                         self.known_tokens.add(tid)
+                        if self.book_depth.enabled:
+                            self._token_meta[tid] = {
+                                "asset": _asset, "slug": _slug, "side_of": side, "end_ts": _end,
+                            }
+                            self.book_depth.watch(
+                                tid, asset=_asset, slug=_slug, side_of=side,
+                                stc_fn=(lambda e=_end: (e - time.time()) if e else None),
+                            )
         if new_tokens:
             self.log.info(f"[DEMO] Subscribing to {len(new_tokens)} new market tokens...")
             await self.ws.subscribe_market_tokens(new_tokens)
