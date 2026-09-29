@@ -55,6 +55,7 @@ from ..strategies.pair_first import PairFirstStrategy as _PairFirstStrategy
 from ..strategies.longshot import check_entry as _longshot_check
 from ..marketdata.markets import MarketData
 from ..sample_io import append_sample
+from ..regime import RegimeController
 
 
 # ── demo defaults from walk-forward analysis ──────────────────────────────
@@ -113,6 +114,11 @@ class DemoPosition:
     leg2_token_id: Optional[str] = None
     leg2_price: float = 0.0
     leg2_filled: bool = False
+    # Regime controller: shadow positions are resolved normally but never touch
+    # virtual capital or public strategy statistics.
+    regime_shadow: bool = False
+    regime_state: str = "ON"
+    regime_context: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -123,7 +129,7 @@ class DemoStatus:
     virtual_capital: float = DEMO_START_CAPITAL
     start_capital: float = DEMO_START_CAPITAL
 
-    def to_dict(self, positions, stats, risk, prices, pending=None) -> dict:
+    def to_dict(self, positions, stats, risk, prices, pending=None, regime=None) -> dict:
         open_pos = []
         for p in positions.values():
             if p.closed:
@@ -157,6 +163,7 @@ class DemoStatus:
             "stats": stats.to_dict(),
             "risk": risk.snapshot() if risk else {},
             "prices": prices.snapshot(),
+            "regime": regime.snapshot() if regime else {},
         }
 
 
@@ -194,6 +201,17 @@ class DemoEngine:
         self.s_demo.max_stake_ratio = self.stake_ratio
         self.s_demo.assets = chosen_assets
         self.s_demo.max_concurrent_positions = max(1, len(chosen_assets))
+        # Demo and live histories must never contaminate each other.
+        demo_regime_path = Path(self.s_demo.regime_state_path)
+        demo_regime_path = demo_regime_path.with_name(f"{demo_regime_path.stem}.demo{demo_regime_path.suffix}")
+        self.s_demo.regime_state_path = str(demo_regime_path)
+        demo_events_path = Path(self.s_demo.regime_events_path)
+        demo_events_path = demo_events_path.with_name(f"{demo_events_path.stem}.demo{demo_events_path.suffix}")
+        self.s_demo.regime_events_path = str(demo_events_path)
+        demo_obs_path = Path(self.s_demo.regime_observations_path)
+        demo_obs_path = demo_obs_path.with_name(f"{demo_obs_path.stem}.demo{demo_obs_path.suffix}")
+        self.s_demo.regime_observations_path = str(demo_obs_path)
+        self.regime = RegimeController.from_settings(self.s_demo, self.log)
         # демо: отключаем лимиты убытков — при WR 55% просадки 40%+ штатны,
         # лимиты 30/50% будут ложно стопить. 1.0 = никогда не сработают.
         self.s_demo.max_daily_loss_pct = 1.0
@@ -1008,16 +1026,32 @@ class DemoEngine:
         # (best_ask + 0.01 by default).
         fill_price = min(0.999, book.best_ask + slippage_tol)
 
-        # compounding sizing: stake = capital * stake_ratio
+        # Regime policy is evaluated only after the complete strategy and book
+        # checks pass. OFF and shadow-PROBE still create a hypothetical position
+        # so the controller can learn without risking capital.
+        regime_decision = self.regime.decision(asset) if self.strategy_name == "twap_inertia" else None
+        is_shadow = bool(regime_decision and not regime_decision.execute)
+
+        # OFF shadow observations use normal comparable notional. Executed PROBE
+        # uses one minimum CLOB lot instead of a percentage that rounds to zero.
         stake = self.status.virtual_capital * self.stake_ratio
         shares = int(stake / fill_price) if fill_price > 0 else 0
+        if regime_decision and regime_decision.execute and regime_decision.state.value == "PROBE":
+            shares = max(int(self.s.regime_probe_order_size), int(self.s.min_order_size))
         
         # Cap shares to available depth across acceptable slippage levels
         if available_depth is not None and available_depth >= min_depth:
             shares = min(shares, int(available_depth))
 
-        min_order = getattr(self.s, "min_order_size", 1)
-        if shares < min_order:   # min order
+        min_order = max(
+            int(getattr(self.s, "min_order_size", 5)),
+            int(getattr(book, "min_order_size", 0) or 0),
+        )
+        if regime_decision and regime_decision.execute and regime_decision.state.value == "PROBE":
+            shares = max(int(self.s.regime_probe_order_size), min_order)
+            if available_depth is not None:
+                shares = min(shares, int(available_depth))
+        if shares < min_order:   # CLOB minimum order
             if self.status.virtual_capital >= min_order * fill_price:
                 shares = min_order
             else:
@@ -1035,14 +1069,36 @@ class DemoEngine:
             cost = round(shares * fill_price, 4)
             total_cost = cost + dyn_fee
 
-        # deduct total cost (order value + dynamic taker fee) from virtual capital
-        self.status.virtual_capital = round(self.status.virtual_capital - total_cost, 4)
+        # Shadow fills are accounting-isolated: they use the same executable
+        # price/depth/fee model but never mutate trading capital.
+        if not is_shadow:
+            self.status.virtual_capital = round(self.status.virtual_capital - total_cost, 4)
 
         pos = DemoPosition(
             slug=market["slug"], asset=asset, token_id=token_id,
             direction=opp.direction, entry_price=fill_price,
             shares=shares, cost=total_cost, entry_ts=time.time(),
             end_ts=market["end_ts"], interval_ts=self._cur_interval,
+            regime_shadow=is_shadow,
+            regime_state=(regime_decision.state.value if regime_decision else "ON"),
+            regime_context={
+                "slug": market["slug"], "direction": opp.direction,
+                "entry_ts": time.time(), "entry_price": fill_price,
+                "shares": shares, "fee_estimate": dyn_fee,
+                "secs_to_close": opp.secs_to_close,
+                "dev_twap_pct": (opp.extra or {}).get("dev_twap_pct"),
+                "barrier_pct": (opp.extra or {}).get("barrier_pct"),
+                "best_bid": book.best_bid, "best_ask": book.best_ask,
+                "spread": book.spread, "best_ask_size": book.best_ask_size,
+                "depth_within_slippage": available_depth,
+                "exchange_min_order_size": book.min_order_size,
+                "configured_min_order_size": self.s.min_order_size,
+                "probe_order_size": self.s.regime_probe_order_size,
+                "book_age": max(0.0, time.time() - book.ts) if book.ts else None,
+                "twap_age": max(0.0, time.time() - self.prices.chainlink_twap_ts.get(asset, 0))
+                            if self.prices.chainlink_twap_ts.get(asset, 0) else None,
+                "oracle_age": self.prices.get_chainlink_age(asset),
+            },
         )
         self.positions[market["slug"]] = pos
         self.traded.add(market["slug"])
@@ -1053,8 +1109,9 @@ class DemoEngine:
             extra_info = f" barrier: {opp.extra['barrier_pct']*100:.3f}%"
         if available_depth is not None:
             extra_info += f" depth: {int(available_depth)}sh"
+        entry_kind = "SHADOW" if is_shadow else ("PROBE" if regime_decision and regime_decision.state.value == "PROBE" else "ENTRY")
         self.log.info(
-            f"[DEMO] ENTRY {asset} {opp.direction} | "
+            f"[DEMO] {entry_kind} {asset} {opp.direction} | "
             f"{shares} shares @ ${fill_price:.3f} = ${cost:.2f} | "
             f"capital: ${self.status.virtual_capital:.2f} | "
             f"oracle: {op_fmt} dev: {(opp.deviation or 0)*100:+.3f}%{extra_info}"
@@ -1164,10 +1221,11 @@ class DemoEngine:
                 pos.won = None
                 pos.pnl = 0.0
                 pos.close_reason = "unresolved"
-                self.status.virtual_capital = round(
-                    self.status.virtual_capital + pos.cost, 4)
-                self._log_result(pos, None, 0.0, pos.cost, 0.0, resolve_method,
-                                 cl_won=_cl_won, tok_won=_tok_won, agree=_agree)
+                if not pos.regime_shadow:
+                    self.status.virtual_capital = round(
+                        self.status.virtual_capital + pos.cost, 4)
+                    self._log_result(pos, None, 0.0, pos.cost, 0.0, resolve_method,
+                                     cl_won=_cl_won, tok_won=_tok_won, agree=_agree)
                 self.closed_history.append({
                     "interval_ts": pos.interval_ts, "asset": pos.asset,
                     "direction": pos.direction, "entry_price": pos.entry_price,
@@ -1199,15 +1257,32 @@ class DemoEngine:
             pos.pnl = round(pnl, 4)
             pos.close_reason = "expired_win" if won else "expired_loss"
 
-            # add proceeds back to virtual capital
-            self.status.virtual_capital = round(self.status.virtual_capital + proceeds, 4)
-            self.risk.record_realized_pnl(pnl)
-            self.stats.record(pnl, EntryType.VACUUM_SCALP,
-                              CloseReason.EXPIRED if not won else CloseReason.TAKE_PROFIT)
+            if pos.regime_shadow:
+                self.regime.record(pos.asset, won=won, pnl=pnl, cost=pos.cost,
+                                   shadow=True, ts=now, context={**pos.regime_context,
+                                   "resolve_method": resolve_method,
+                                   "chainlink_won": _cl_won, "token_won": _tok_won,
+                                   "cross_agree": _agree})
+                self.log.info(
+                    f"[DEMO] SHADOW RESOLVE {pos.asset} {'WIN' if won else 'LOSS'} | "
+                    f"pnl=${pnl:+.2f} | regime={self.regime.metrics(pos.asset)['state']}",
+                    slug=pos.slug, resolve_method=resolve_method)
+            else:
+                # add proceeds back to virtual capital
+                self.status.virtual_capital = round(self.status.virtual_capital + proceeds, 4)
+                self.risk.record_realized_pnl(pnl)
+                self.stats.record(pnl, EntryType.VACUUM_SCALP,
+                                  CloseReason.EXPIRED if not won else CloseReason.TAKE_PROFIT)
+                if self.strategy_name == "twap_inertia":
+                    self.regime.record(pos.asset, won=won, pnl=pnl, cost=pos.cost,
+                                       shadow=False, ts=now, context={**pos.regime_context,
+                                       "resolve_method": resolve_method,
+                                       "chainlink_won": _cl_won, "token_won": _tok_won,
+                                       "cross_agree": _agree})
 
-            # ── structured trade result → logs/demo_results.jsonl + console + demo.log ──
-            self._log_result(pos, won, pnl, proceeds, dyn_fee, resolve_method,
-                             cl_won=_cl_won, tok_won=_tok_won, agree=_agree)
+                # structured real/demo trade result (shadow has a separate audit log event)
+                self._log_result(pos, won, pnl, proceeds, dyn_fee, resolve_method,
+                                 cl_won=_cl_won, tok_won=_tok_won, agree=_agree)
 
             # persist to history for later comparison with backtest
             self.closed_history.append({

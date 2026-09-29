@@ -84,6 +84,26 @@ class Settings(BaseSettings):
     twap_slippage_tol: float = 0.01       # count executable depth up to best_ask + this tolerance
     twap_min_level_depth: int = 5         # min shares available at best_ask level
 
+    # ── Per-asset regime controller (fail-closed; disabled by default) ─────
+    regime_enabled: bool = False
+    regime_probe_execute: bool = False    # False = PROBE remains shadow-only
+    # Executed PROBE uses exactly one exchange-minimum lot, never a percentage
+    # that can silently round below the CLOB minimum.
+    regime_probe_order_size: int = 5
+    regime_window: int = 15
+    regime_probe_min_trades: int = 10
+    regime_on_min_trades: int = 15
+    regime_probe_min_wr: float = 0.80
+    regime_on_min_wr: float = 0.85
+    regime_probe_max_reversal: float = 0.20
+    regime_on_max_reversal: float = 0.15
+    regime_posterior_threshold: float = 0.90
+    regime_demote_wr: float = 0.72
+    regime_demote_ev: float = 0.0
+    regime_state_path: str = str(PROJECT_ROOT / "storage" / "regime_state.json")
+    regime_events_path: str = str(PROJECT_ROOT / "logs" / "regime_events.jsonl")
+    regime_observations_path: str = str(PROJECT_ROOT / "logs" / "regime_observations.jsonl")
+
     # ── Spread capture / hedge-lite ───────────────────────────────────────
     spread_capture_pair_threshold: float = 0.97   # buy opposite only if up+down below this
     spread_capture_min_edge: float = 0.03         # gross edge needed to cover 2-3% fees
@@ -94,7 +114,7 @@ class Settings(BaseSettings):
     entry_window_secs: int = 11
     min_lot_price: float = 0.89
     high_price_threshold: float = 0.97
-    min_order_size: int = 1
+    min_order_size: int = 5       # CLOB book minimum; validate against market metadata
     min_order_value: float = 1.0
     standard_buy_price: float = 0.99
 

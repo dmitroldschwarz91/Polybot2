@@ -47,7 +47,7 @@ def create_demo_router(settings: Settings) -> APIRouter:
                     "virtual_capital": DEMO_START_CAPITAL,
                     "start_capital": DEMO_START_CAPITAL}
         return eng.status.to_dict(eng.positions, eng.stats, eng.risk, eng.prices,
-                                  getattr(eng, "_pending_leg1", {}))
+                                  getattr(eng, "_pending_leg1", {}), eng.regime)
 
     @router.post("/api/demo/start")
     async def demo_start(req: DemoConfigRequest = DemoConfigRequest()):
@@ -138,7 +138,7 @@ def create_demo_router(settings: Settings) -> APIRouter:
                 eng = get_demo()
                 if eng and eng.running:
                     payload = eng.status.to_dict(eng.positions, eng.stats, eng.risk, eng.prices,
-                                                getattr(eng, "_pending_leg1", {}))
+                                                getattr(eng, "_pending_leg1", {}), eng.regime)
                 else:
                     payload = {"running": False, "demo": True,
                                "virtual_capital": DEMO_START_CAPITAL,

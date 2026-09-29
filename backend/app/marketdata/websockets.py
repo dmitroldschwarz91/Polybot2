@@ -501,7 +501,8 @@ class WebSocketManager:
                       for b in bids if isinstance(b, dict)]
                 na = [{"price": a.get("price", "0"), "size": a.get("size", "0")}
                       for a in asks if isinstance(a, dict)]
-                self.prices.update_full_book(aid, nb, na)
+                min_order = payload.get("min_order_size") or payload.get("minOrderSize")
+                self.prices.update_full_book(aid, nb, na, min_order_size=min_order)
         elif et == "price_change":
             self._apply_bba(payload)
             for pc in (payload.get("price_changes") or payload.get("priceChanges") or []):

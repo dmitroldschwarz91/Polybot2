@@ -33,6 +33,7 @@ from ..marketdata.websockets import WebSocketManager
 from ..marketdata.book_poller import BookPoller
 from ..risk.manager import RiskManager
 from ..sample_io import append_sample
+from ..regime import RegimeController
 from ..strategies import all_strategies
 from ..strategies.base import Opportunity
 from ..strategies.favdip import check_entry as _favdip_check
@@ -50,7 +51,7 @@ class BotStatus:
         self.initial_balance = 0.0
 
     def to_dict(self, positions, stats, risk, prices, balance_state, paper: bool,
-                hold: bool = True) -> dict:
+                hold: bool = True, regime=None) -> dict:
         open_positions = [p.to_dict() for p in positions.values() if not p.closed]
         return {
             "running": self.running,
@@ -64,6 +65,7 @@ class BotStatus:
             "stats": stats.to_dict(),
             "risk": risk.snapshot(),
             "prices": prices.snapshot(),
+            "regime": regime.snapshot() if regime else {},
         }
 
 
@@ -87,6 +89,7 @@ class TradingEngine:
         self.book_poller = BookPoller(settings, self.prices, self.log, poll_interval=5.0)
         self.strategies = all_strategies(settings)
         self.db = Database(settings.database_url)
+        self.regime = RegimeController.from_settings(settings, self.log)
 
         # runtime state
         self.positions: Dict[str, Position] = {}
@@ -105,7 +108,7 @@ class TradingEngine:
         self.samples_log_path.parent.mkdir(parents=True, exist_ok=True)
         self._last_sample_ts: Dict[str, float] = {}
         self._cur_interval: int = 0
-        
+
     # ── lifecycle ────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -236,7 +239,7 @@ class TradingEngine:
                 if new_tokens:
                     await self.ws.subscribe_market_tokens(new_tokens)
                     self.book_poller.watch(new_tokens)
-                
+
                 # sample interval state for live bot
                 for asset, market in zip(self.s.assets, markets):
                     effective_market = market if (market and isinstance(market, dict)) else {
@@ -493,10 +496,14 @@ class TradingEngine:
 
         limit_price = min(0.999, reference_ask + slippage_tol)
         buy_price = round_to_tick(limit_price, tick_size)
-                
+
         # sizing
         avail = await run_sync(self.client.get_real_balance)
         effective = min(self.status.bot_balance, avail) if (avail is not None and not self.client.paper) else self.status.bot_balance
+
+        regime_decision = (self.regime.decision(asset)
+                           if strat.entry_type == EntryType.TWAP_INERTIA else None)
+        is_shadow = bool(regime_decision and not regime_decision.execute)
 
         if strat.entry_type == EntryType.EARLY_TREND:
             stake = self.risk.early_trend_stake(effective)
@@ -506,27 +513,92 @@ class TradingEngine:
             stake = self.risk.twap_inertia_stake(effective)
         else:
             stake = self.risk.stake_with_imbalance(effective, imb)
-        
+
         # Enforce hard upper cap based on max_stake_ratio
         max_allowed_stake = float(
             (Decimal(str(effective)) * Decimal(str(self.s.max_stake_ratio)))
             .quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         )
         stake = min(stake, max_allowed_stake)
-        
+        # A shadow fill uses normal notional for comparable EV observations. An
+        # executed PROBE is exactly one CLOB minimum lot, not a capital ratio.
+        probe_size = None
+        if regime_decision and regime_decision.execute and regime_decision.state.value == "PROBE":
+            exchange_min = int(getattr(fresh_book, "min_order_size", 0) or 0)
+            probe_size = max(int(self.s.regime_probe_order_size),
+                             int(self.s.min_order_size), exchange_min)
+            stake = probe_size * buy_price
+
         if stake <= 0:
             return False
-        size = round_size(stake / buy_price)
+        size = probe_size if probe_size is not None else round_size(stake / buy_price)
         if depth_size is not None and strat.entry_type == EntryType.TWAP_INERTIA:
             size = min(size, int(depth_size))
-        if size < self.s.min_order_size:
+        effective_min_order = max(
+            int(self.s.min_order_size),
+            int(getattr(fresh_book, "min_order_size", 0) or 0),
+        )
+        if size < effective_min_order:
             return False
         cost = round(size * buy_price, 4)
-        while cost > stake and size >= self.s.min_order_size:
+        while cost > stake and size >= effective_min_order:
             size -= 1
             cost = round(size * buy_price, 4)
-        if size < self.s.min_order_size or cost < self.s.min_order_value:
+        if size < effective_min_order or cost < self.s.min_order_value:
             return False
+        if probe_size is not None:
+            probe_fee = polymarket_dynamic_taker_fee(size, buy_price)
+            if cost + probe_fee > effective:
+                self.log.warning(f"[{asset}] PROBE blocked: minimum lot exceeds available balance",
+                                 shares=size, required=round(cost + probe_fee, 4),
+                                 available=round(effective, 4))
+                self.regime.audit_event(
+                    "REGIME_PROBE_BLOCKED", asset=asset, state="PROBE",
+                    reason="minimum_lot_exceeds_available_balance",
+                    shares=size, entry_price=buy_price,
+                    required=round(cost + probe_fee, 4), available=round(effective, 4),
+                    slug=market["slug"])
+                return False
+
+        regime_context = {
+            "slug": market["slug"], "direction": direction,
+            "entry_ts": time.time(), "entry_price": buy_price, "shares": size,
+            "secs_to_close": opp.secs_to_close,
+            "dev_twap_pct": (opp.extra or {}).get("dev_twap_pct"),
+            "barrier_pct": (opp.extra or {}).get("barrier_pct"),
+            "best_bid": getattr(fresh_book, "best_bid", None),
+            "best_ask": getattr(fresh_book, "best_ask", None),
+            "spread": getattr(fresh_book, "spread", None),
+            "best_ask_size": getattr(fresh_book, "best_ask_size", None),
+            "depth_within_slippage": depth_size,
+            "exchange_min_order_size": getattr(fresh_book, "min_order_size", None),
+            "configured_min_order_size": self.s.min_order_size,
+            "probe_order_size": self.s.regime_probe_order_size,
+            "book_age": (max(0.0, time.time() - fresh_book.ts)
+                         if fresh_book and fresh_book.ts else None),
+            "twap_age": (max(0.0, time.time() - self.prices.chainlink_twap_ts.get(asset, 0))
+                         if self.prices.chainlink_twap_ts.get(asset, 0) else None),
+            "oracle_age": self.prices.get_chainlink_age(asset),
+        }
+
+        if is_shadow:
+            shadow_fee = polymarket_dynamic_taker_fee(size, buy_price)
+            pos = strat.build_position(
+                market["slug"], asset, opp,
+                {"price": buy_price, "size": size, "cost": cost + shadow_fee,
+                 "order_id": "regime-shadow"},
+                market["end_ts"],
+            )
+            pos.fee_paid = shadow_fee
+            pos.regime_shadow = True
+            pos.regime_state = regime_decision.state.value
+            pos.regime_context = {**regime_context, "fee_estimate": shadow_fee}
+            self.positions[market["slug"]] = pos
+            self.traded.add(market["slug"])
+            self.log.info(f"[{asset}] SHADOW {direction} [twap_inertia]",
+                          price=buy_price, lots=size, hypothetical_cost=cost + shadow_fee,
+                          regime=regime_decision.state.value)
+            return True
 
         self.log.info(f"[{asset}] ENTRY {direction} [{strat.entry_type.value}]",
                       price=buy_price, lots=size, cost=f"${cost:.2f}",
@@ -555,6 +627,11 @@ class TradingEngine:
 
         pos = strat.build_position(market["slug"], asset, opp, result, market["end_ts"])
         pos.fee_paid = polymarket_dynamic_taker_fee(asize, ap)
+        if regime_decision:
+            pos.regime_state = regime_decision.state.value
+            pos.regime_context = {**regime_context, "actual_entry_price": ap,
+                                  "actual_shares": asize, "actual_cost": acost,
+                                  "fee_estimate": pos.fee_paid}
         if self.s.hold_to_resolution:
             pos.take_profit_price = 999.0  # never triggers
             pos.stop_loss_price = 0.0      # never triggers
@@ -712,7 +789,7 @@ class TradingEngine:
             "dn_ask_size": dn_asize, "dn_ask_size_at": dn_ask_at, "dn_bq": dn_bq,
         }
         append_sample(self.samples_log_path, rec)
-        
+
     async def _resolve_start_prices(self, cur: int, secs_from_start: float) -> None:
         for asset in self.s.assets:
             key = str(cur)
@@ -748,7 +825,7 @@ class TradingEngine:
         self.fills.orders = {k: v for k, v in self.fills.orders.items() if v.get("last_ts", 0) > cutoff}
         self.market_data.cleanup_caches()
         interval_resolved_pnl = 0.0
-        
+
         for slug, pos in list(self.positions.items()):
             # FavDip pair_locked: both legs filled -> guaranteed 0.98
             if (not pos.closed and pos.is_pair and pos.leg2_filled
@@ -828,11 +905,12 @@ class TradingEngine:
                         self.log.error(
                             f"[{pos.asset}] UNRESOLVED: no resolution data for {slug} → neutral")
                     pos.record_close(CloseReason.EXPIRED, 0.0, pos.entry_cost)
-                    # neutral: return the cost deducted at entry (NOT a loss)
-                    self.status.bot_balance += pos.entry_cost
-                    self._log_resolution(pos, None, 0.0, 0.0, 0.0, resolve_method,
-                                         _cl_won, _tok_won, _agree)
-                    await self.db.save_trade(pos)
+                    if not pos.regime_shadow:
+                        # neutral: return the cost deducted at entry (NOT a loss)
+                        self.status.bot_balance += pos.entry_cost
+                        self._log_resolution(pos, None, 0.0, 0.0, 0.0, resolve_method,
+                                             _cl_won, _tok_won, _agree)
+                        await self.db.save_trade(pos)
                     self.positions.pop(slug, None)
                     continue
 
@@ -844,23 +922,42 @@ class TradingEngine:
                 if won:
                     proceeds = pos.current_size * 1.0  # $1 per winning contract, 0% winnings fee
                     pnl = proceeds - pos.entry_cost
-                    self.status.bot_balance += proceeds
+                    if not pos.regime_shadow:
+                        self.status.bot_balance += proceeds
                 else:
                     proceeds = 0.0
                     pnl = -pos.entry_cost
                     self.status.bot_balance += 0.0
 
                 pos.record_close(CloseReason.EXPIRED, pnl)
-                self.stats.record(pnl, pos.entry_type, CloseReason.EXPIRED)
-                self.risk.record_realized_pnl(pnl)
-                interval_resolved_pnl += pnl
-                tag = "✓ WIN" if won else "✗ LOSS"
-                self.log.info(f"[{pos.asset}] RESOLVE {tag} pnl=${pnl:+.2f} dyn_fee=${dyn_fee:.4f} method={resolve_method}",
-                              chainlink_won=_cl_won, token_won=_tok_won, agree=_agree)
-                self._log_resolution(pos, won, pnl,
-                                     proceeds if won else 0.0,
-                                     dyn_fee,
-                                     resolve_method, _cl_won, _tok_won, _agree)
+                if pos.regime_shadow:
+                    self.regime.record(pos.asset, won=won, pnl=pnl,
+                                       cost=pos.entry_cost, shadow=True, ts=now,
+                                       context={**pos.regime_context,
+                                       "resolve_method": resolve_method,
+                                       "chainlink_won": _cl_won, "token_won": _tok_won,
+                                       "cross_agree": _agree})
+                    self.log.info(f"[{pos.asset}] SHADOW RESOLVE {'WIN' if won else 'LOSS'}",
+                                  pnl=f"${pnl:+.2f}", method=resolve_method,
+                                  regime=self.regime.metrics(pos.asset)["state"])
+                else:
+                    self.stats.record(pnl, pos.entry_type, CloseReason.EXPIRED)
+                    self.risk.record_realized_pnl(pnl)
+                    interval_resolved_pnl += pnl
+                    if pos.entry_type == EntryType.TWAP_INERTIA:
+                        self.regime.record(pos.asset, won=won, pnl=pnl,
+                                           cost=pos.entry_cost, shadow=False, ts=now,
+                                           context={**pos.regime_context,
+                                           "resolve_method": resolve_method,
+                                           "chainlink_won": _cl_won, "token_won": _tok_won,
+                                           "cross_agree": _agree})
+                    tag = "✓ WIN" if won else "✗ LOSS"
+                    self.log.info(f"[{pos.asset}] RESOLVE {tag} pnl=${pnl:+.2f} dyn_fee=${dyn_fee:.4f} method={resolve_method}",
+                                  chainlink_won=_cl_won, token_won=_tok_won, agree=_agree)
+                    self._log_resolution(pos, won, pnl,
+                                         proceeds if won else 0.0,
+                                         dyn_fee,
+                                         resolve_method, _cl_won, _tok_won, _agree)
                 # late ground-truth recheck (measures real Chainlink error rate)
                 if self.s.cross_late_snapshot:
                     asyncio.create_task(self._late_cross_check({
@@ -870,10 +967,10 @@ class TradingEngine:
                         "chainlink_won_at_resolve": _cl_won,
                         "token_won_at_resolve": _tok_won,
                     }))
-                
+
             if pos.closed:
                 self.positions.pop(slug, None)
-                
+
         return {s for s in self.traded if str(cur_ts) in s}, interval_resolved_pnl
 
     async def _delayed_balance_post_audit(self, interval_num: int, interval_ts: int,
