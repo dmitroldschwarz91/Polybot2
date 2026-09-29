@@ -153,7 +153,8 @@ class BookPoller:
                 bids = book.get("bids") or []
                 asks = book.get("asks") or []
                 if isinstance(bids, list) and isinstance(asks, list) and (bids or asks):
-                    self.prices.update_full_book(token_id, bids, asks)
+                    min_order = book.get("min_order_size") or book.get("minOrderSize")
+                    self.prices.update_full_book(token_id, bids, asks, min_order_size=min_order)
                     self.polls_ok += 1
                     return
 

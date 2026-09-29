@@ -28,7 +28,8 @@ def create_router(engine, settings: Settings) -> APIRouter:
     @router.get("/api/status")
     async def status():
         return engine.status.to_dict(engine.positions, engine.stats, engine.risk,
-                                     engine.prices, engine.balance.state, settings.paper_trading)
+                                     engine.prices, engine.balance.state, settings.paper_trading,
+                                     regime=engine.regime)
 
     @router.post("/api/bot/start")
     async def start_bot(req: Optional[BotStartRequest] = None, strategy: Optional[str] = None):
@@ -87,6 +88,7 @@ def create_router(engine, settings: Settings) -> APIRouter:
                 payload = engine.status.to_dict(
                     engine.positions, engine.stats, engine.risk,
                     engine.prices, engine.balance.state, settings.paper_trading,
+                    regime=engine.regime,
                 )
                 await ws.send_text(json.dumps(payload, default=str))
                 await asyncio.sleep(1.0)

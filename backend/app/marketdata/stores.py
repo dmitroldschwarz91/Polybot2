@@ -106,6 +106,7 @@ class OrderBook:
     spread: Optional[float] = None
     ts: float = 0.0
     stale: bool = False
+    min_order_size: Optional[float] = None  # CLOB market metadata
 
 
 class LivePriceStore:
@@ -363,7 +364,8 @@ class LivePriceStore:
         book.ts = now
         self._notify_book_listeners(token_id, book)
 
-    def update_full_book(self, token_id: str, bids: List[dict], asks: List[dict]) -> None:
+    def update_full_book(self, token_id: str, bids: List[dict], asks: List[dict],
+                         min_order_size: Optional[float] = None) -> None:
         now = time.time()
 
         def _num(d: dict, key: str = "price") -> float:
@@ -387,6 +389,7 @@ class LivePriceStore:
             bid_volume=bid_vol, ask_volume=ask_vol,
             best_bid_size=bb_size, best_ask_size=ba_size,
             spread=(ba - bb) if (ba is not None and bb is not None) else None, ts=now,
+            min_order_size=(float(min_order_size) if min_order_size is not None else None),
         )
         if ba and ba > 0:
             self.lot_prices[token_id] = ba
